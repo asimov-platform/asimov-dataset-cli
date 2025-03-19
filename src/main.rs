@@ -10,6 +10,7 @@ use clientele::{
     crates::clap::{CommandFactory, Parser, Subcommand},
     exit,
 };
+use near_api::AccountId;
 
 /// ASIMOV Dataset Command-Line Interface (CLI)
 #[derive(Debug, Parser)]
@@ -55,11 +56,16 @@ struct PublishCommand {
     /// Files to publish
     #[arg(required = true)]
     files: Vec<String>,
+
+    network: String,
 }
 
-pub fn main() {
+#[tokio::main]
+pub async fn main() {
     // Load environment variables from `.env`:
     let _ = clientele::dotenv();
+
+    tracing_subscriber::fmt::init();
 
     // Expand wildcards and @argfiles:
     let Ok(args) = clientele::args_os() else {
@@ -88,9 +94,39 @@ pub fn main() {
     }
 
     match options.command {
-        Some(Command::Prepare(PrepareCommand { files })) => println!("Prepare: {:?}", files),
-        Some(Command::Publish(PublishCommand { repository, files })) => {
-            println!("Publish: {:?} {:?}", repository, files)
+        Some(Command::Prepare(PrepareCommand { files })) => {
+            asimov_dataset_cli::prepare_datasets(&files).expect("`prepare` failed");
+        }
+        Some(Command::Publish(PublishCommand {
+            repository,
+            files,
+            network,
+        })) => {
+            let network_config = match network.as_str() {
+                "mainnet" => near_api::NetworkConfig::mainnet(),
+                "testnet" => near_api::NetworkConfig::testnet(),
+                _ => {
+                    print!("Unknown network name: {}", network);
+                    exit(EX_OK);
+                }
+            };
+
+            let near_signer: AccountId = std::env::var("NEAR_SIGNER")
+                .expect("need NEAR_SIGNER")
+                .try_into()
+                .expect("invalid account name in NEAR_SIGNER");
+
+            let signer = near_api::signer::keystore::KeystoreSigner::search_for_keys(
+                near_signer,
+                &network_config,
+            )
+            .await
+            .expect("failed to get key in keystore");
+            let signer = near_api::Signer::new(signer).unwrap();
+
+            asimov_dataset_cli::publish_datasets(&repository, signer, &files)
+                .await
+                .expect("`prepare` failed");
         }
         None => todo!(),
     }
