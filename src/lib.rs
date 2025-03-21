@@ -1,10 +1,15 @@
 // This is free and unencumbered software released into the public domain.
 
+use borsh::BorshSerialize;
+use near_api::{
+    AccountId, NearGas, NetworkConfig, Transaction,
+    near_primitives::action::{Action, FunctionCallAction},
+};
 use rdf_writer::Writer;
-use std::{error::Error, sync::Arc};
+use std::{error::Error, io::Read, sync::Arc};
 
 pub fn prepare_datasets(files: &[String]) -> Result<(), Box<dyn Error>> {
-    let mut reader = files
+    let reader = files
         .iter()
         .flat_map(|file| rdf_reader::open_path(file, None))
         .flatten();
@@ -13,8 +18,7 @@ pub fn prepare_datasets(files: &[String]) -> Result<(), Box<dyn Error>> {
     let sink = std::fs::File::create(format!("prepared.{:06}.rdfb", file_idx))?;
     let mut writer = rdf_borsh::BorshWriter::new(Box::new(sink))?;
 
-    loop {
-        let Some(stmt) = reader.next() else { break };
+    for stmt in reader {
         let stmt = &*stmt?;
 
         match writer.write_statement(stmt) {
@@ -43,9 +47,32 @@ pub fn prepare_datasets(files: &[String]) -> Result<(), Box<dyn Error>> {
 }
 
 pub async fn publish_datasets(
-    _repository: &str,
-    _signer: Arc<near_api::Signer>,
-    _files: &[String],
+    repository: AccountId,
+    signer: Arc<near_api::Signer>,
+    network: &NetworkConfig,
+    files: &[String],
 ) -> Result<(), Box<dyn Error>> {
+    for file in files {
+        let mut args = Vec::new();
+        1_u8.serialize(&mut args)?; // version 1
+        "".serialize(&mut args)?;
+        1_u8.serialize(&mut args)?; // RDF/Borsh dataset encoding
+
+        std::fs::File::open(file)?.read_to_end(&mut args)?;
+
+        let _tx_outcome = Transaction::construct(repository.clone(), repository.clone())
+            .add_action(Action::FunctionCall(Box::new(FunctionCallAction {
+                method_name: "rdf_insert".into(),
+                args,
+                gas: NearGas::from_tgas(100).as_gas(),
+                deposit: 0,
+            })))
+            .with_signer(signer.clone())
+            .send_to(network)
+            .await
+            .inspect(
+                |outcome| tracing::info!(?file, status = ?outcome.transaction_outcome.outcome.status, "uploaded dataset"),
+            )?;
+    }
     Ok(())
 }

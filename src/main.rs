@@ -57,6 +57,7 @@ struct PublishCommand {
     #[arg(required = true)]
     files: Vec<String>,
 
+    #[arg(long)]
     network: String,
 }
 
@@ -102,6 +103,8 @@ pub async fn main() {
             files,
             network,
         })) => {
+            let repository: AccountId = repository.parse().expect("invalid repository");
+
             let network_config = match network.as_str() {
                 "mainnet" => near_api::NetworkConfig::mainnet(),
                 "testnet" => near_api::NetworkConfig::testnet(),
@@ -113,7 +116,7 @@ pub async fn main() {
 
             let near_signer: AccountId = std::env::var("NEAR_SIGNER")
                 .expect("need NEAR_SIGNER")
-                .try_into()
+                .parse()
                 .expect("invalid account name in NEAR_SIGNER");
 
             let signer = near_api::signer::keystore::KeystoreSigner::search_for_keys(
@@ -124,7 +127,7 @@ pub async fn main() {
             .expect("failed to get key in keystore");
             let signer = near_api::Signer::new(signer).unwrap();
 
-            asimov_dataset_cli::publish_datasets(&repository, signer, &files)
+            asimov_dataset_cli::publish_datasets(repository, signer, &network_config, &files)
                 .await
                 .expect("`prepare` failed");
         }
