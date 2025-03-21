@@ -64,7 +64,7 @@ pub async fn publish_datasets(
             .add_action(Action::FunctionCall(Box::new(FunctionCallAction {
                 method_name: "rdf_insert".into(),
                 args,
-                gas: NearGas::from_tgas(100).as_gas(),
+                gas: NearGas::from_tgas(300).as_gas(),
                 deposit: 0,
             })))
             .with_signer(signer.clone())
