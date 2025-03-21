@@ -96,7 +96,14 @@ pub async fn main() {
 
     match options.command {
         Some(Command::Prepare(PrepareCommand { files })) => {
+            let start = std::time::Instant::now();
             asimov_dataset_cli::prepare_datasets(&files).expect("`prepare` failed");
+            if options.flags.debug {
+                println!(
+                    "Prepare took: {:#?}",
+                    std::time::Instant::now().duration_since(start)
+                );
+            }
         }
         Some(Command::Publish(PublishCommand {
             repository,
