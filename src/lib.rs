@@ -99,7 +99,7 @@ pub fn prepare_datasets(files: &[String]) -> Result<(), Box<dyn Error>> {
 
             // write to a file
             let filename = format!("prepared.{:06}.rdfb", file_idx);
-            trace!(data = data.len(), ratio, filename, "WRITING FILE");
+            info!(data.len = data.len(), ratio, filename, "Writing file");
             std::fs::File::create(&filename)?.write_all(&data)?;
             file_idx += 1;
 

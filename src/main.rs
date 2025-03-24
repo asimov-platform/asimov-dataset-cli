@@ -11,6 +11,7 @@ use clientele::{
     exit,
 };
 use near_api::AccountId;
+use tracing::debug;
 
 /// ASIMOV Dataset Command-Line Interface (CLI)
 #[derive(Debug, Parser)]
@@ -50,15 +51,16 @@ struct PrepareCommand {
 /// Options for the publish command
 #[derive(Debug, Parser)]
 struct PublishCommand {
+    /// Network on which to publish. Either `mainnet` or `testnet`
+    #[arg(long)]
+    network: String,
+
     /// Repository where to publish the dataset files
     #[arg(required = true)]
     repository: String,
     /// Files to publish
     #[arg(required = true)]
     files: Vec<String>,
-
-    #[arg(long)]
-    network: String,
 }
 
 #[tokio::main]
@@ -98,12 +100,10 @@ pub async fn main() {
         Some(Command::Prepare(PrepareCommand { files })) => {
             let start = std::time::Instant::now();
             asimov_dataset_cli::prepare_datasets(&files).expect("`prepare` failed");
-            if options.flags.debug {
-                println!(
-                    "Prepare took: {:#?}",
-                    std::time::Instant::now().duration_since(start)
-                );
-            }
+            debug!(
+                duration = ?std::time::Instant::now().duration_since(start),
+                "Prepare finished"
+            );
         }
         Some(Command::Publish(PublishCommand {
             repository,
@@ -136,7 +136,7 @@ pub async fn main() {
 
             asimov_dataset_cli::publish_datasets(repository, signer, &network_config, &files)
                 .await
-                .expect("`prepare` failed");
+                .expect("`publish` failed");
         }
         None => todo!(),
     }
