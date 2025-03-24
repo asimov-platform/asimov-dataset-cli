@@ -15,17 +15,15 @@ use std::{
     rc::Rc,
     sync::Arc,
 };
-use tracing::{error, trace, warn};
+use tracing::{debug, info, trace, warn};
 
-const MAX_FILE_SIZE: usize = 1_572_864; // bytes
-//const MAX_FILE_SIZE: usize = 3 * (1 << 10); // bytes
+const MAX_FILE_SIZE: usize = 1_572_864 - 1024; // bytes, leave some room for rdf_insert header
 
 pub fn prepare_datasets(files: &[String]) -> Result<(), Box<dyn Error>> {
     let mut reader = files
         .iter()
         .flat_map(|file| rdf_reader::open_path(file, None))
-        .flatten()
-        .fuse();
+        .flatten();
 
     let mut file_idx = 1_usize;
 
@@ -33,29 +31,22 @@ pub fn prepare_datasets(files: &[String]) -> Result<(), Box<dyn Error>> {
     let mut statement_buffer: VecDeque<Box<dyn Statement>> = VecDeque::new();
 
     let mut write_count: usize = 1;
-    let mut write_count_delta: isize = 1;
+    let mut write_count_delta: usize = 1;
     let mut have_more = true;
     let mut best_ratio: f64 = 0.0;
 
-    'outer: loop {
+    loop {
         while have_more {
             match reader.next() {
                 Some(stmt) => {
                     statement_buffer.push_back(stmt?);
-                    if statement_buffer.len() >= write_count {
-                        break;
-                    }
                 }
                 None => {
-                    if statement_buffer.is_empty() {
-                        // no more statements left
-                        break 'outer;
-                    } else {
-                        // we have leftovers in the buffer, write those out
-                        have_more = false;
-                        break;
-                    }
+                    have_more = false;
                 }
+            }
+            if statement_buffer.len() >= write_count {
+                break;
             }
         }
 
@@ -66,50 +57,24 @@ pub fn prepare_datasets(files: &[String]) -> Result<(), Box<dyn Error>> {
         let data = match serialize_statements(statement_buffer.iter().take(write_count)) {
             Ok(data) => data,
             Err(err) if err.kind() == std::io::ErrorKind::Other => {
-                error!(?err, "failed to serialize");
+                debug!(?err, "failed to serialize");
 
-                write_count_delta = if write_count_delta > 1 {
-                    -1
+                // backtrack
+                write_count -= write_count_delta;
+
+                if write_count_delta > 1 {
+                    // the last delta was too large so pull back
+                    write_count_delta = (write_count_delta >> 2).max(1);
                 } else {
-                    -write_count_delta.abs() << 1
+                    // this helps get unstuck
+                    write_count -= 1;
                 }
-                .min(-1);
-                write_count = write_count.checked_add_signed(write_count_delta).unwrap();
+                write_count += write_count_delta;
 
                 continue;
             }
             Err(err) => panic!("{err}"),
         };
-
-        // target=4
-        // start write_count=1
-        // deltas=+1,+2
-        // 1 -> 2 -> 4
-
-        // target=5
-        // start write_count=1
-        // deltas=+1,+2+,+4,-2,-1
-        // 1 -> 2 -> 4 -> 8 -> 6 -> 5
-
-        // target=6
-        // start write_count=1
-        // deltas=+1,+2+,+4,-2
-        // 1 -> 2 -> 4 -> 8 -> 6
-
-        // target=7
-        // start write_count=1
-        // deltas=+1,+2,+4,-2,+1
-        // 1 -> 2 -> 4 -> 8 -> 6 -> 7
-
-        // target=8
-        // start write_count=1
-        // deltas=+1,+2,+4
-        // 1 -> 2 -> 4 -> 8
-
-        // target=9
-        // start write_count=1
-        // deltas=+1,+2,+4,+8,-4,-2,-1
-        // 1 -> 2 -> 4 -> 8 -> 16 -> 12 -> 10 -> 9
 
         let ratio = data.len() as f64 / MAX_FILE_SIZE as f64;
 
@@ -130,7 +95,6 @@ pub fn prepare_datasets(files: &[String]) -> Result<(), Box<dyn Error>> {
         {
             statement_buffer.drain(..write_count.min(statement_buffer.len()));
             write_count = 1;
-            write_count_delta = 1;
             best_ratio = 0.0;
 
             // write to a file
@@ -150,26 +114,24 @@ pub fn prepare_datasets(files: &[String]) -> Result<(), Box<dyn Error>> {
                 continue;
             }
 
-            write_count_delta = if write_count_delta > 1 {
-                -1
+            // backtrack
+            write_count -= write_count_delta;
+
+            if write_count_delta > 1 {
+                // the last delta was too large so pull back
+                write_count_delta = (write_count_delta >> 2).max(1);
             } else {
-                -write_count_delta.abs() << 1
+                // this helps get unstuck
+                write_count -= 1;
             }
-            .min(-1);
         } else {
             // target is larger than current size
             best_ratio = best_ratio.max(ratio);
 
-            //write_count_delta = (write_count_delta << 1).max(1);
-            write_count_delta = if write_count_delta < 0 {
-                1
-            } else {
-                write_count_delta << 1
-            }
-            .max(1);
+            write_count_delta <<= 1;
         }
 
-        write_count = write_count.checked_add_signed(write_count_delta).unwrap();
+        write_count += write_count_delta;
     }
 
     Ok(())
@@ -206,9 +168,15 @@ pub async fn publish_datasets(
     Ok(())
 }
 
-#[derive(Default)]
 struct SharedBufferWriter {
     buffer: Rc<std::cell::RefCell<Vec<u8>>>,
+}
+
+impl Default for SharedBufferWriter {
+    fn default() -> Self {
+        let buffer = Rc::new(RefCell::new(Vec::with_capacity(MAX_FILE_SIZE)));
+        Self { buffer }
+    }
 }
 
 impl SharedBufferWriter {
