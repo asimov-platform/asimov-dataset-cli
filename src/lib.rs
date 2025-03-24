@@ -30,7 +30,7 @@ pub fn prepare_datasets(files: &[String]) -> Result<(), Box<dyn Error>> {
     let mut file_idx = 1_usize;
 
     // Buffer for storing statements that need to be retried
-    let mut statement_buffer: VecDeque<Rc<dyn Statement>> = VecDeque::new();
+    let mut statement_buffer: VecDeque<Box<dyn Statement>> = VecDeque::new();
 
     let mut write_count: usize = 1;
     let mut write_count_delta: isize = 1;
@@ -41,7 +41,7 @@ pub fn prepare_datasets(files: &[String]) -> Result<(), Box<dyn Error>> {
         while have_more {
             match reader.next() {
                 Some(stmt) => {
-                    statement_buffer.push_back(stmt?.into());
+                    statement_buffer.push_back(stmt?);
                     if statement_buffer.len() >= write_count {
                         break;
                     }
@@ -63,12 +63,7 @@ pub fn prepare_datasets(files: &[String]) -> Result<(), Box<dyn Error>> {
             break;
         }
 
-        let stmts = statement_buffer
-            .iter()
-            .take(write_count)
-            .collect::<Vec<_>>();
-
-        let data = match serialize_statements(&stmts) {
+        let data = match serialize_statements(statement_buffer.iter().take(write_count)) {
             Ok(data) => data,
             Err(err) if err.kind() == std::io::ErrorKind::Other => {
                 error!(?err, "failed to serialize");
@@ -235,9 +230,11 @@ impl std::io::Write for SharedBufferWriter {
     }
 }
 
-fn serialize_statements<T: AsRef<dyn Statement>>(
-    statements: &[T],
-) -> Result<Vec<u8>, std::io::Error> {
+fn serialize_statements<T, I>(statements: I) -> Result<Vec<u8>, std::io::Error>
+where
+    T: AsRef<dyn Statement>,
+    I: Iterator<Item = T>,
+{
     let w = SharedBufferWriter::default();
     let buf = w.buffer();
     let mut writer = rdf_borsh::BorshWriter::new(Box::new(w))?;
