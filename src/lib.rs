@@ -47,7 +47,6 @@ pub fn prepare_datasets(files: &[String]) -> Result<(), Box<dyn Error>> {
     // write_count doesn't meet ACCEPTABLE_RATIO.
     let mut best_ratio: f64 = 0.0;
 
-    let mut backtrack_count: usize = 2;
 
     loop {
         while have_more && (statement_buffer.len() < write_count) {
@@ -84,11 +83,10 @@ pub fn prepare_datasets(files: &[String]) -> Result<(), Box<dyn Error>> {
 
                 if write_count_delta == 1 {
                     // this helps get unstuck
-                    write_count = lowest_overflow - backtrack_count;
-                    backtrack_count += 1;
+                    write_count = lowest_overflow - 2;
                 } else {
                     // the last delta was too large so pull back
-                    write_count_delta >>= 2;
+                    write_count_delta >>= 1;
                 }
 
                 if write_count_delta == 0 {
@@ -135,7 +133,6 @@ pub fn prepare_datasets(files: &[String]) -> Result<(), Box<dyn Error>> {
             write_count = 1;
             best_ratio = 0.0;
             lowest_overflow = usize::MAX;
-            backtrack_count += 2;
 
             continue;
         }
@@ -155,11 +152,10 @@ pub fn prepare_datasets(files: &[String]) -> Result<(), Box<dyn Error>> {
 
             if write_count_delta == 1 {
                 // this helps get unstuck
-                write_count = lowest_overflow - backtrack_count;
-                backtrack_count += 1;
+                write_count = lowest_overflow - 2;
             } else {
                 // the last delta was too large so pull back
-                write_count_delta >>= 2;
+                write_count_delta >>= 1;
             }
         } else {
             // current size is smaller than max
@@ -178,7 +174,10 @@ pub fn prepare_datasets(files: &[String]) -> Result<(), Box<dyn Error>> {
             write_count_delta = 1
         };
 
-        if write_count_delta == 1 && write_count + write_count_delta >= lowest_overflow {
+        if (write_count + 1) >= lowest_overflow {
+            // If we end up here it means that the best_ratio was somewhere on N-1, N-2, ...
+            // Just accept current ratio and on next iteration this will write the file.
+            best_ratio = ratio;
             continue;
         }
 
