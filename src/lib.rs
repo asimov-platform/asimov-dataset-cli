@@ -15,9 +15,13 @@ use std::{
     rc::Rc,
     sync::Arc,
 };
-use tracing::{debug, info, trace, warn};
+use tracing::{info, trace, warn};
 
-const MAX_FILE_SIZE: usize = 1_572_864 - 1024; // bytes, leave some room for rdf_insert header
+/// Max bytes for serialized result, leaving some room for rdf_insert header.
+const MAX_FILE_SIZE: usize = 1_572_864 - 1024;
+
+/// Controls how close we want the serialized result to be to MAX_FILE_SIZE.
+const ACCEPTABLE_RATIO: f64 = 0.9;
 
 pub fn prepare_datasets(files: &[String]) -> Result<(), Box<dyn Error>> {
     let mut reader = files
@@ -25,18 +29,28 @@ pub fn prepare_datasets(files: &[String]) -> Result<(), Box<dyn Error>> {
         .flat_map(|file| rdf_reader::open_path(file, None))
         .flatten();
 
-    let mut file_idx = 1_usize;
-
+    // The index for output file. Used as `prepared.{:06d}.rdfb`.
+    let mut file_idx: usize = 1;
     // Buffer for storing statements that need to be retried
     let mut statement_buffer: VecDeque<Box<dyn Statement>> = VecDeque::new();
-
+    // write_count is how many we're trying to serialize each iteration
     let mut write_count: usize = 1;
+    // write_count_delta controls how we update write_count if the resulting data is either too
+    // large or too small
     let mut write_count_delta: usize = 1;
+    // lowest_overflow is the lowest known write_count where result data is too large
+    let mut lowest_overflow: usize = usize::MAX;
+    // have_more states whether the iterator has more items
     let mut have_more = true;
+    // best_ratio contains the best known (non-overflowing) size ratio for each iteration.
+    // It's used to quit early in the case where adding one more statement overflows but current
+    // write_count doesn't meet ACCEPTABLE_RATIO.
     let mut best_ratio: f64 = 0.0;
 
+    let mut backtrack_count: usize = 2;
+
     loop {
-        while have_more {
+        while have_more && (statement_buffer.len() < write_count) {
             match reader.next() {
                 Some(stmt) => {
                     statement_buffer.push_back(stmt?);
@@ -44,9 +58,6 @@ pub fn prepare_datasets(files: &[String]) -> Result<(), Box<dyn Error>> {
                 None => {
                     have_more = false;
                 }
-            }
-            if statement_buffer.len() >= write_count {
-                break;
             }
         }
 
@@ -57,18 +68,33 @@ pub fn prepare_datasets(files: &[String]) -> Result<(), Box<dyn Error>> {
         let data = match serialize_statements(statement_buffer.iter().take(write_count)) {
             Ok(data) => data,
             Err(err) if err.kind() == std::io::ErrorKind::Other => {
-                debug!(?err, "failed to serialize");
+                trace!(
+                    statement_count = write_count.min(statement_buffer.len()),
+                    write_count,
+                    write_count_delta,
+                    best_ratio,
+                    ?err,
+                    "failed to serialize"
+                );
+
+                lowest_overflow = lowest_overflow.min(write_count);
 
                 // backtrack
                 write_count -= write_count_delta;
 
-                if write_count_delta > 1 {
-                    // the last delta was too large so pull back
-                    write_count_delta = (write_count_delta >> 2).max(1);
-                } else {
+                if write_count_delta == 1 {
                     // this helps get unstuck
-                    write_count -= 1;
+                    write_count = lowest_overflow - backtrack_count;
+                    backtrack_count += 1;
+                } else {
+                    // the last delta was too large so pull back
+                    write_count_delta >>= 2;
                 }
+
+                if write_count_delta == 0 {
+                    write_count_delta = 1
+                };
+
                 write_count += write_count_delta;
 
                 continue;
@@ -81,54 +107,79 @@ pub fn prepare_datasets(files: &[String]) -> Result<(), Box<dyn Error>> {
         trace!(
             data = data.len(),
             statement_buffer = statement_buffer.len(),
-            have_more,
             ratio,
             best_ratio,
+            lowest_overflow,
             write_count,
             write_count_delta
         );
 
         if 1.0 > ratio
-            && (ratio > 0.9
+            && (ratio > ACCEPTABLE_RATIO
                 || ratio == best_ratio
                 || (statement_buffer.len() < write_count && !have_more))
         {
+            // write to a file
+            let filename = format!("prepared.{:06}.rdfb", file_idx);
+            info!(
+                data.len = data.len(),
+                statement_count = write_count.min(statement_buffer.len()),
+                ratio,
+                filename,
+                "Writing file"
+            );
+            std::fs::File::create(&filename)?.write_all(&data)?;
+            file_idx += 1;
+
             statement_buffer.drain(..write_count.min(statement_buffer.len()));
             write_count = 1;
             best_ratio = 0.0;
-
-            // write to a file
-            let filename = format!("prepared.{:06}.rdfb", file_idx);
-            info!(data.len = data.len(), ratio, filename, "Writing file");
-            std::fs::File::create(&filename)?.write_all(&data)?;
-            file_idx += 1;
+            lowest_overflow = usize::MAX;
+            backtrack_count += 2;
 
             continue;
         }
 
         if ratio > 1.0 {
-            // target is smaller than current size
+            // current size is larger than max
             if write_count == 1 {
                 let stmt = statement_buffer.pop_front();
                 warn!(?stmt, "statement is too large to be published even alone");
                 continue;
             }
 
+            lowest_overflow = lowest_overflow.min(write_count);
+
             // backtrack
             write_count -= write_count_delta;
 
-            if write_count_delta > 1 {
-                // the last delta was too large so pull back
-                write_count_delta = (write_count_delta >> 2).max(1);
-            } else {
+            if write_count_delta == 1 {
                 // this helps get unstuck
-                write_count -= 1;
+                write_count = lowest_overflow - backtrack_count;
+                backtrack_count += 1;
+            } else {
+                // the last delta was too large so pull back
+                write_count_delta >>= 2;
             }
         } else {
-            // target is larger than current size
+            // current size is smaller than max
+
             best_ratio = best_ratio.max(ratio);
 
             write_count_delta <<= 1;
+
+            let diff = lowest_overflow - write_count;
+            while write_count_delta >= diff {
+                write_count_delta >>= 1;
+            }
+        }
+
+        if write_count_delta == 0 {
+            write_count_delta = 1
+        };
+
+        if write_count_delta == 1 && write_count + write_count_delta >= lowest_overflow {
+            continue;
         }
 
         write_count += write_count_delta;
