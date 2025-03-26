@@ -47,7 +47,7 @@ tracing = "0.1.41"
 tracing-subscriber = "0.3.19"
 
 [[bin]]
-name = "asimov"
+name = "asimov-dataset-cli"
 path = "src/main.rs"
 
 [profile.release]
