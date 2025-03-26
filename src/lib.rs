@@ -146,8 +146,12 @@ pub fn prepare_datasets(files: &[String]) -> Result<(), Box<dyn Error>> {
         if ratio > 1.0 {
             // current size is larger than max
             if write_count == 1 {
-                let stmt = statement_buffer.pop_front();
-                warn!(?stmt, "statement is too large to be published even alone");
+                let _stmt = statement_buffer.pop_front();
+                let statement_number = total_written + 1;
+                warn!(
+                    ?statement_number,
+                    "statement is too large to be published even alone"
+                );
                 continue;
             }
 
