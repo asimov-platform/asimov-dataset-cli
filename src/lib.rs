@@ -47,6 +47,7 @@ pub fn prepare_datasets(files: &[String]) -> Result<(), Box<dyn Error>> {
     // write_count doesn't meet ACCEPTABLE_RATIO.
     let mut best_ratio: f64 = 0.0;
 
+    let mut total_written: usize = 0;
 
     loop {
         while have_more && (statement_buffer.len() < write_count) {
@@ -117,11 +118,15 @@ pub fn prepare_datasets(files: &[String]) -> Result<(), Box<dyn Error>> {
                 || ratio == best_ratio
                 || (statement_buffer.len() < write_count && !have_more))
         {
+            let written = write_count.min(statement_buffer.len());
+            total_written += written;
+
             // write to a file
             let filename = format!("prepared.{:06}.rdfb", file_idx);
             info!(
                 data.len = data.len(),
-                statement_count = write_count.min(statement_buffer.len()),
+                batch_statement_count = written,
+                total_statement_count = total_written,
                 ratio,
                 filename,
                 "Writing file"
@@ -129,7 +134,8 @@ pub fn prepare_datasets(files: &[String]) -> Result<(), Box<dyn Error>> {
             std::fs::File::create(&filename)?.write_all(&data)?;
             file_idx += 1;
 
-            statement_buffer.drain(..write_count.min(statement_buffer.len()));
+            statement_buffer.drain(..written);
+            // reset these:
             write_count = 1;
             best_ratio = 0.0;
             lowest_overflow = usize::MAX;
