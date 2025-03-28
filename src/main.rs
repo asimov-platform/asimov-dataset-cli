@@ -99,7 +99,7 @@ pub async fn main() {
     match options.command {
         Some(Command::Prepare(PrepareCommand { files })) => {
             let start = std::time::Instant::now();
-            asimov_dataset_cli::prepare_datasets(&files).expect("`prepare` failed");
+            asimov_dataset_cli::prepare::prepare_datasets(&files).expect("`prepare` failed");
             debug!(
                 duration = ?std::time::Instant::now().duration_since(start),
                 "Prepare finished"
@@ -134,9 +134,14 @@ pub async fn main() {
             .expect("failed to get key in keystore");
             let signer = near_api::Signer::new(signer).unwrap();
 
-            asimov_dataset_cli::publish_datasets(repository, signer, &network_config, &files)
-                .await
-                .expect("`publish` failed");
+            asimov_dataset_cli::publish::publish_datasets(
+                repository,
+                signer,
+                &network_config,
+                &files,
+            )
+            .await
+            .expect("`publish` failed");
         }
         None => todo!(),
     }
