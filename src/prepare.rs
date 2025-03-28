@@ -1,33 +1,112 @@
 // This is free and unencumbered software released into the public domain.
 
-use rdf_reader::{Format, ReaderOptions};
 use rdf_rs::model::Statement;
 use rdf_writer::Writer;
-use std::{cell::RefCell, collections::VecDeque, error::Error, io::Write, path::PathBuf, rc::Rc};
+use std::{
+    cell::RefCell, collections::VecDeque, error::Error, fs::File, io::Write, path::PathBuf, rc::Rc,
+};
 use tracing::{info, trace, warn};
 
 /// Max bytes for serialized result, leaving some room for rdf_insert header.
 const MAX_FILE_SIZE: usize = 1_572_864 - 1024;
 
 /// Controls how close we want the serialized result to be to MAX_FILE_SIZE.
-const ACCEPTABLE_RATIO: f64 = 0.9;
+const ACCEPTABLE_RATIO: f64 = 0.99;
 
 pub fn prepare_datasets(files: &[String]) -> Result<(), Box<dyn Error>> {
-    let mut reader = files
-        .iter()
-        .map(|file| {
-            let file = PathBuf::from(file);
-            let format = file
-                .extension()
-                .and_then(std::ffi::OsStr::to_str)
-                .and_then(Format::from_extension);
-            (file, format)
-        })
-        .flat_map(|(file, format)| rdf_reader::open_path(&file, Some(ReaderOptions { format })))
-        .flatten();
+    std::thread::scope(|s| {
+        let (batch_req_send, batch_req_recv) = std::sync::mpsc::sync_channel(10);
+        let (dataset_send, dataset_recv) = std::sync::mpsc::sync_channel(10);
 
+        let files: Vec<String> = files.to_vec();
+        let producer = files
+            .into_iter()
+            .map(|file| {
+                let file = PathBuf::from(file);
+                let format = file
+                    .extension()
+                    .and_then(std::ffi::OsStr::to_str)
+                    .and_then(oxrdfio::RdfFormat::from_extension);
+                (file, format)
+            })
+            .flat_map(|(file, format)| {
+                oxrdfio::RdfParser::from_format(format.unwrap())
+                    .for_reader(File::open(file).unwrap())
+            })
+            .flatten();
+
+        s.spawn(|| read_worker_loop(producer, batch_req_recv));
+
+        for _ in 0..num_cpus::get() {
+            let batch_req_send = batch_req_send.clone();
+            let dataset_send = dataset_send.clone();
+            s.spawn(|| prepare_worker_loop(batch_req_send, dataset_send));
+        }
+
+        s.spawn(|| write_worker_loop(dataset_recv));
+    });
+
+    Ok(())
+}
+
+pub struct StatementBatchRequest {
+    pub amount: usize,
+    pub response_chan: oneshot::Sender<StatementBatch>,
+}
+
+pub struct StatementBatch {
+    pub quads: Vec<oxrdf::Quad>,
+    pub quad_start_index: usize,
+}
+
+#[derive(Default)]
+pub struct RDFBDataset {
+    pub data: Vec<u8>,
+    pub statement_start_index: usize,
+    pub statement_count: usize,
+}
+
+fn read_worker_loop<I>(mut producer: I, requests: std::sync::mpsc::Receiver<StatementBatchRequest>)
+where
+    I: Iterator<Item = oxrdf::Quad>,
+{
+    let mut cur_idx: usize = 0;
+    while let Ok(req) = requests.recv() {
+        let mut quads: Vec<oxrdf::Quad> = Vec::with_capacity(req.amount);
+
+        for _ in 0..req.amount {
+            let Some(quad) = producer.next() else {
+                let batch = StatementBatch {
+                    quads,
+                    quad_start_index: cur_idx,
+                };
+
+                req.response_chan.send(batch).unwrap();
+                return;
+            };
+            quads.push(quad);
+        }
+
+        let quads_len = quads.len();
+
+        let batch = StatementBatch {
+            quads,
+            quad_start_index: cur_idx,
+        };
+
+        req.response_chan.send(batch).unwrap();
+
+        cur_idx += quads_len;
+    }
+}
+
+fn prepare_worker_loop(
+    // producer: Arc<Mutex<std::sync::mpsc::Receiver<StatementBatch>>>,
+    batch_requests: std::sync::mpsc::SyncSender<StatementBatchRequest>,
+    sink: std::sync::mpsc::SyncSender<RDFBDataset>,
+) {
     // The index for output file. Used as `prepared.{:06d}.rdfb`.
-    let mut file_idx: usize = 1;
+    // let mut file_idx: usize = 1;
     // Buffer for storing statements that need to be retried
     let mut statement_buffer: VecDeque<Box<dyn Statement>> = VecDeque::new();
     // write_count is how many we're trying to serialize each iteration
@@ -48,13 +127,23 @@ pub fn prepare_datasets(files: &[String]) -> Result<(), Box<dyn Error>> {
 
     loop {
         while have_more && (statement_buffer.len() < write_count) {
-            match reader.next() {
-                Some(stmt) => {
-                    statement_buffer.push_back(stmt?);
-                }
-                None => {
-                    have_more = false;
-                }
+            let (batch_send, batch_rec) = oneshot::channel();
+            if batch_requests
+                .send(StatementBatchRequest {
+                    amount: write_count - statement_buffer.len(),
+                    response_chan: batch_send,
+                })
+                .is_err()
+            {
+                have_more = false;
+                break;
+            }
+            let Ok(batch) = batch_rec.recv() else {
+                have_more = false;
+                break;
+            };
+            for statement in batch.quads {
+                statement_buffer.push_back(statement.into());
             }
         }
 
@@ -118,18 +207,12 @@ pub fn prepare_datasets(files: &[String]) -> Result<(), Box<dyn Error>> {
             let written = write_count.min(statement_buffer.len());
             total_written += written;
 
-            // write to a file
-            let filename = format!("prepared.{:06}.rdfb", file_idx);
-            info!(
-                data.len = data.len(),
-                batch_statement_count = written,
-                total_statement_count = total_written,
-                ratio,
-                filename,
-                "Writing file"
-            );
-            std::fs::File::create(&filename)?.write_all(&data)?;
-            file_idx += 1;
+            sink.send(RDFBDataset {
+                data,
+                statement_start_index: 0,
+                statement_count: written,
+            })
+            .unwrap();
 
             statement_buffer.drain(..written);
             // reset these:
@@ -190,8 +273,29 @@ pub fn prepare_datasets(files: &[String]) -> Result<(), Box<dyn Error>> {
 
         write_count += write_count_delta;
     }
+}
 
-    Ok(())
+fn write_worker_loop(producer: std::sync::mpsc::Receiver<RDFBDataset>) {
+    let mut file_idx: usize = 1;
+    let mut total_written: usize = 0;
+    while let Ok(prepared) = producer.recv() {
+        let filename = format!("prepared.{:06}.rdfb", file_idx);
+        std::fs::File::create(&filename)
+            .unwrap()
+            .write_all(&prepared.data)
+            .unwrap();
+        total_written += prepared.statement_count;
+        let ratio = prepared.data.len() as f64 / MAX_FILE_SIZE as f64;
+        info!(
+            batch_size = prepared.data.len(),
+            batch_statement_count = prepared.statement_count,
+            total_statement_count = total_written,
+            ratio,
+            filename,
+            "Writing file"
+        );
+        file_idx += 1;
+    }
 }
 
 struct SharedBufferWriter {

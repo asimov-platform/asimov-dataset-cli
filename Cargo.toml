@@ -38,8 +38,11 @@ clap = { version = "4.5", default-features = false }
 clientele = "0.2.5"
 color-print = "=0.3.7"
 near-api = "0.5.0"
+num_cpus = "^1.0"
+oneshot = "0.1.11"
+oxrdf = { version = "0.2.4", features = ["rdf-star"] }
+oxrdfio = { version = "0.1.7", features = ["rdf-star"] }
 rdf-borsh = "0.2.0"
-rdf-reader = { version = "0.2.0", features = ["unstable"] }
 rdf-writer = "0.2.0"
 rdf_rs = "0.2.0"
 tokio = { version = "1.44.1", features = ["rt-multi-thread", "macros"] }
