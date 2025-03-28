@@ -5,6 +5,7 @@ use near_api::{
     AccountId, NearGas, NetworkConfig, Transaction,
     near_primitives::action::{Action, FunctionCallAction},
 };
+use rdf_reader::{Format, ReaderOptions};
 use rdf_rs::model::Statement;
 use rdf_writer::Writer;
 use std::{
@@ -12,6 +13,7 @@ use std::{
     collections::VecDeque,
     error::Error,
     io::{Read, Write},
+    path::PathBuf,
     rc::Rc,
     sync::Arc,
 };
@@ -26,7 +28,15 @@ const ACCEPTABLE_RATIO: f64 = 0.9;
 pub fn prepare_datasets(files: &[String]) -> Result<(), Box<dyn Error>> {
     let mut reader = files
         .iter()
-        .flat_map(|file| rdf_reader::open_path(file, None))
+        .map(|file| {
+            let file = PathBuf::from(file);
+            let format = file
+                .extension()
+                .and_then(std::ffi::OsStr::to_str)
+                .and_then(Format::from_extension);
+            (file, format)
+        })
+        .flat_map(|(file, format)| rdf_reader::open_path(&file, Some(ReaderOptions { format })))
         .flatten();
 
     // The index for output file. Used as `prepared.{:06d}.rdfb`.
