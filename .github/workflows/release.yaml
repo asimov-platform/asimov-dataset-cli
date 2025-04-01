@@ -5,8 +5,10 @@ name: Release
 # Trigger on any tag creation:
 on:
   push:
-    tags:
-      - "*"
+  workflow_dispatch:
+#  push:
+#    tags:
+#      - "*"
 
 jobs:
   build:
