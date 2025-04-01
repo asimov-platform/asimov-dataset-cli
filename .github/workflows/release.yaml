@@ -60,7 +60,7 @@ jobs:
           binary-extension: ${{ matrix.extension }}
           strip-artifact: ${{ matrix.strip || 'false' }}
           use-zigbuild: ${{ matrix.use-zigbuild || 'false' }}
-          rust-toolchain: stable
+          rust-toolchain: nightly
 
   release:
     name: Release
