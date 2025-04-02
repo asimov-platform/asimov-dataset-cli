@@ -126,6 +126,7 @@ fn read_worker_loop(
                         filename: PathBuf::from(file),
                         bytes,
                         statement_count: statement_index + 1,
+                        statement_count: statement_index,
                         finished,
                     }))
                     .unwrap();
