@@ -29,9 +29,9 @@ pub async fn publish_datasets<I>(
     report: Option<PublishStatsReport>,
 ) -> Result<(), Box<dyn Error>>
 where
-    I: Iterator<Item = PathBuf>,
+    I: Iterator<Item = (PathBuf, usize)>,
 {
-    for filename in files {
+    for (filename, statement_count) in files {
         let mut args = Vec::new();
         1_u8.serialize(&mut args)?; // version 1
         "".serialize(&mut args)?;
@@ -61,7 +61,7 @@ where
                 .send(crate::ui::Event::Publish(crate::ui::PublishProgress {
                     filename,
                     bytes,
-                    statement_count: 0,
+                    statement_count,
                 }))
                 .unwrap();
         }

@@ -4,12 +4,7 @@
 
 mod feature;
 
-use std::{
-    collections::VecDeque,
-    os::unix::fs::MetadataExt,
-    path::PathBuf,
-    time::{Duration, Instant},
-};
+use std::{collections::VecDeque, os::unix::fs::MetadataExt, path::PathBuf};
 
 use asimov_dataset_cli::{
     prepare::PrepareStatsReport,
@@ -22,9 +17,9 @@ use clientele::{
     crates::clap::{CommandFactory, Parser, Subcommand},
     exit,
 };
-use crossterm::event;
 use near_api::AccountId;
 use ratatui::TerminalOptions;
+use tokio::task::JoinSet;
 use tracing::debug;
 
 /// ASIMOV Dataset Command-Line Interface (CLI)
@@ -111,216 +106,195 @@ pub async fn main() {
     }
 
     match options.command {
-        Some(Command::Prepare(PrepareCommand { files })) => {
-            let start = std::time::Instant::now();
+        Some(Command::Prepare(cmd)) => cmd.run().await,
+        Some(Command::Publish(cmd)) => cmd.run().await,
+        None => todo!(),
+    }
+    .unwrap();
+}
 
-            let (tx, rx) = crossbeam::channel::unbounded();
+impl PrepareCommand {
+    async fn run(self) -> Result<(), Box<dyn std::error::Error>> {
+        let start = std::time::Instant::now();
 
-            let mut terminal = ratatui::init_with_options(TerminalOptions {
-                viewport: ratatui::Viewport::Inline(30),
-            });
+        let (tx, rx) = crossbeam::channel::unbounded();
 
-            std::thread::scope(|s| {
-                let files: Vec<PathBuf> = files
-                    .iter()
-                    .map(PathBuf::from)
-                    .filter(|file| std::fs::exists(file).unwrap_or(false))
-                    .collect();
-                let queued_files: VecDeque<(PathBuf, usize)> = files
-                    .iter()
-                    .cloned()
-                    .map(|file| {
-                        let size = std::fs::metadata(&file).unwrap().size() as usize;
-                        (file, size)
-                    })
-                    .collect();
+        let mut terminal = ratatui::init_with_options(TerminalOptions {
+            viewport: ratatui::Viewport::Inline(30),
+        });
 
-                let total_bytes = queued_files.iter().fold(0, |acc, (_, size)| acc + size);
+        let files: Vec<PathBuf> = self
+            .files
+            .iter()
+            .map(PathBuf::from)
+            .filter(|file| std::fs::exists(file).unwrap_or(false))
+            .collect();
+        let queued_files: VecDeque<(PathBuf, usize)> = files
+            .iter()
+            .cloned()
+            .map(|file| {
+                let size = std::fs::metadata(&file).unwrap().size() as usize;
+                (file, size)
+            })
+            .collect();
 
-                let ui_state = ui::Prepare {
-                    total_bytes,
-                    queued_files,
-                    ..Default::default()
-                };
+        let total_bytes = queued_files.iter().fold(0, |acc, (_, size)| acc + size);
 
-                s.spawn({
-                    let tx = tx.clone();
-                    move || {
-                        let tick_rate = Duration::from_millis(200);
-                        let mut last_tick = Instant::now();
-                        loop {
-                            // poll for tick rate duration, if no events, sent tick event.
-                            let timeout = tick_rate.saturating_sub(last_tick.elapsed());
-                            if event::poll(timeout).unwrap() {
-                                match event::read().unwrap() {
-                                    event::Event::Key(key) => {
-                                        tx.send(ui::Event::Input(key)).unwrap()
-                                    }
-                                    event::Event::Resize(_, _) => {
-                                        tx.send(ui::Event::Resize).unwrap()
-                                    }
-                                    _ => {}
-                                };
-                            }
-                            if last_tick.elapsed() >= tick_rate {
-                                tx.send(ui::Event::Tick).unwrap();
-                                last_tick = Instant::now();
-                            }
-                        }
-                    }
-                });
+        let ui_state = ui::Prepare {
+            total_bytes,
+            queued_files,
+            ..Default::default()
+        };
 
-                s.spawn(move || ui::run_prepare(&mut terminal, ui_state, rx));
+        let mut set = JoinSet::new();
 
-                let report = Some(asimov_dataset_cli::prepare::PrepareStatsReport { tx });
+        set.spawn_blocking({
+            let tx = tx.clone();
+            move || ui::listen_input(&tx)
+        });
 
-                let _files = asimov_dataset_cli::prepare::prepare_datasets(&files, report)
-                    .expect("`prepare` failed");
-            });
+        let report = Some(asimov_dataset_cli::prepare::PrepareStatsReport { tx });
 
-            ratatui::restore();
+        set.spawn(async move {
+            asimov_dataset_cli::prepare::prepare_datasets(files.into_iter(), None, report)
+                .await
+                .expect("`prepare` failed");
+        });
 
-            debug!(
-                duration = ?std::time::Instant::now().duration_since(start),
-                "Prepare finished"
-            );
-        }
-        Some(Command::Publish(PublishCommand {
-            repository,
-            files,
-            network,
-        })) => {
-            let files: Vec<PathBuf> = files
-                .iter()
-                .map(PathBuf::from)
-                .filter(|file| std::fs::exists(file).unwrap_or(false))
-                .collect();
+        ui::run_prepare(&mut terminal, ui_state, rx).unwrap();
 
-            let repository: AccountId = repository.parse().expect("invalid repository");
+        let _ = set.join_all().await;
 
-            let network_config = match network.as_str() {
-                "mainnet" => near_api::NetworkConfig::mainnet(),
-                "testnet" => near_api::NetworkConfig::testnet(),
-                _ => {
-                    print!("Unknown network name: {}", network);
-                    exit(EX_OK);
-                }
-            };
+        ratatui::restore();
 
-            let near_signer: AccountId = std::env::var("NEAR_SIGNER")
-                .expect("need NEAR_SIGNER")
-                .parse()
-                .expect("invalid account name in NEAR_SIGNER");
+        debug!(
+            duration = ?std::time::Instant::now().duration_since(start),
+            "Prepare finished"
+        );
 
-            let signer = near_api::signer::keystore::KeystoreSigner::search_for_keys(
-                near_signer,
-                &network_config,
-            )
-            .await
-            .expect("failed to get key in keystore");
-            let signer = near_api::Signer::new(signer).unwrap();
+        Ok(())
+    }
+}
 
-            let (tx, rx) = crossbeam::channel::unbounded();
+impl PublishCommand {
+    async fn run(self) -> Result<(), Box<dyn std::error::Error>> {
+        let files: Vec<PathBuf> = self
+            .files
+            .iter()
+            .map(PathBuf::from)
+            .filter(|file| std::fs::exists(file).unwrap_or(false))
+            .collect();
 
-            let mut set = tokio::task::JoinSet::new();
+        let repository: AccountId = self.repository.parse().expect("invalid repository");
 
-            let (prepared_files, unprepared_files) = publish::split_prepared_files(&files);
+        let network_config = match self.network.as_str() {
+            "mainnet" => near_api::NetworkConfig::mainnet(),
+            "testnet" => near_api::NetworkConfig::testnet(),
+            _ => {
+                print!("Unknown network name: {}", self.network);
+                exit(EX_OK);
+            }
+        };
 
-            {
-                let prepared = prepared_files.clone();
+        let near_signer: AccountId = std::env::var("NEAR_SIGNER")
+            .expect("need NEAR_SIGNER")
+            .parse()
+            .expect("invalid account name in NEAR_SIGNER");
 
-                if !unprepared_files.is_empty() {
-                    let chan = asimov_dataset_cli::prepare::prepare_datasets(
-                        &unprepared_files,
+        let signer = near_api::signer::keystore::KeystoreSigner::search_for_keys(
+            near_signer,
+            &network_config,
+        )
+        .await
+        .expect("failed to get key in keystore");
+        let signer = near_api::Signer::new(signer).unwrap();
+
+        let (tx, rx) = crossbeam::channel::unbounded();
+
+        let mut set = JoinSet::new();
+
+        let (prepared_files, unprepared_files) = publish::split_prepared_files(&files);
+
+        let prepared_files: VecDeque<(PathBuf, usize)> = prepared_files
+            .iter()
+            .cloned()
+            .map(|file| {
+                let size = std::fs::metadata(&file).unwrap().size() as usize;
+                (file, size)
+            })
+            .collect();
+
+        let (files_tx, files_rx) = crossbeam::channel::unbounded();
+
+        if !unprepared_files.is_empty() {
+            set.spawn({
+                let tx = tx.clone();
+                let unprepared_files = unprepared_files.clone().into_iter();
+                async move {
+                    asimov_dataset_cli::prepare::prepare_datasets(
+                        unprepared_files,
+                        Some(files_tx),
                         Some(PrepareStatsReport { tx: tx.clone() }),
                     )
+                    .await
                     .unwrap();
-                    let tx = tx.clone();
-                    set.spawn({
-                        async move {
-                            asimov_dataset_cli::publish::publish_datasets(
-                                repository,
-                                signer,
-                                &network_config,
-                                prepared.into_iter().chain(chan.iter()),
-                                Some(PublishStatsReport { tx }),
-                            )
-                            .await
-                            .unwrap();
-                        }
-                    });
-                } else {
-                    let tx = tx.clone();
-                    set.spawn({
-                        async move {
-                            asimov_dataset_cli::publish::publish_datasets(
-                                repository,
-                                signer,
-                                &network_config,
-                                prepared.into_iter(),
-                                Some(PublishStatsReport { tx }),
-                            )
-                            .await
-                            .unwrap();
-                        }
-                    });
-                }
-            }
-
-            let unprepared_files: VecDeque<(PathBuf, usize)> = unprepared_files
-                .iter()
-                .cloned()
-                .map(|file| {
-                    let size = std::fs::metadata(&file).unwrap().size() as usize;
-                    (file, size)
-                })
-                .collect();
-
-            let total_bytes = unprepared_files.iter().fold(0, |acc, (_, size)| acc + size);
-
-            set.spawn_blocking({
-                let tx = tx.clone();
-                move || {
-                    let tick_rate = Duration::from_millis(200);
-                    let mut last_tick = Instant::now();
-                    loop {
-                        // poll for tick rate duration, if no events, sent tick event.
-                        let timeout = tick_rate.saturating_sub(last_tick.elapsed());
-                        if event::poll(timeout).unwrap() {
-                            match event::read().unwrap() {
-                                event::Event::Key(key) => tx.send(ui::Event::Input(key)).unwrap(),
-                                event::Event::Resize(_, _) => tx.send(ui::Event::Resize).unwrap(),
-                                _ => {}
-                            };
-                        }
-                        if last_tick.elapsed() >= tick_rate {
-                            tx.send(ui::Event::Tick).unwrap();
-                            last_tick = Instant::now();
-                        }
-                    }
                 }
             });
-
-            set.spawn_blocking(move || {
-                let mut terminal = ratatui::init_with_options(TerminalOptions {
-                    viewport: ratatui::Viewport::Inline(30),
-                });
-                let ui_state = ui::Publish {
-                    queued_files: prepared_files.into(),
-                    prepare: Some(ui::Prepare {
-                        total_bytes,
-                        queued_files: unprepared_files,
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                };
-                ui::run_publish(&mut terminal, ui_state, rx).unwrap();
-            });
-
-            let _ = set.join_all().await;
-
-            ratatui::restore();
+        } else {
+            drop(files_tx);
         }
-        None => todo!(),
+
+        set.spawn({
+            let tx = tx.clone();
+            let prepared_files = prepared_files.clone().into_iter();
+            async move {
+                asimov_dataset_cli::publish::publish_datasets(
+                    repository,
+                    signer,
+                    &network_config,
+                    prepared_files.chain(files_rx.iter()),
+                    Some(PublishStatsReport { tx }),
+                )
+                .await
+                .unwrap();
+            }
+        });
+
+        let unprepared_files: VecDeque<(PathBuf, usize)> = unprepared_files
+            .iter()
+            .cloned()
+            .map(|file| {
+                let size = std::fs::metadata(&file).unwrap().size() as usize;
+                (file, size)
+            })
+            .collect();
+
+        let total_bytes = unprepared_files.iter().fold(0, |acc, (_, size)| acc + size);
+
+        set.spawn_blocking({
+            let tx = tx.clone();
+            move || ui::listen_input(&tx)
+        });
+
+        let mut terminal = ratatui::init_with_options(TerminalOptions {
+            viewport: ratatui::Viewport::Inline(30),
+        });
+        let ui_state = ui::Publish {
+            queued_files: prepared_files,
+            prepare: Some(ui::Prepare {
+                total_bytes,
+                queued_files: unprepared_files,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        ui::run_publish(&mut terminal, ui_state, rx).unwrap();
+
+        let _ = set.join_all().await;
+
+        ratatui::restore();
+
+        Ok(())
     }
 }

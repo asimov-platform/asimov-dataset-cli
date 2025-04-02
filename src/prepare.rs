@@ -12,6 +12,7 @@ use std::{
     path::PathBuf,
     rc::Rc,
 };
+use tokio::task::JoinSet;
 use tracing::info;
 
 /// Max bytes for serialized result, leaving some room for rdf_insert header.
@@ -25,14 +26,20 @@ pub struct PrepareStatsReport {
     pub tx: Sender<crate::ui::Event>,
 }
 
-pub fn prepare_datasets(
-    files: &[PathBuf],
+pub async fn prepare_datasets<I>(
+    files: I,
+    files_sink: Option<Sender<(PathBuf, usize)>>,
     report: Option<PrepareStatsReport>,
-) -> Result<Receiver<PathBuf>, Box<dyn Error>> {
+) -> Result<(), Box<dyn Error>>
+where
+    I: Iterator<Item = PathBuf>,
+{
     let (batch_send, batch_recv) = crossbeam::channel::bounded(100);
 
-    std::thread::spawn({
-        let files = files.to_vec();
+    let mut set = JoinSet::new();
+
+    set.spawn_blocking({
+        let files: Vec<PathBuf> = files.collect();
         let report = report.clone();
         move || read_worker_loop(&files, batch_send, report)
     });
@@ -42,14 +49,15 @@ pub fn prepare_datasets(
     for _ in 0..4 {
         let batch_recv = batch_recv.clone();
         let dataset_send = dataset_send.clone();
-        std::thread::spawn(|| prepare_worker_loop(batch_recv, dataset_send));
+        set.spawn_blocking(|| prepare_worker_loop(batch_recv, dataset_send));
     }
 
-    let (files_send, files_recv) = crossbeam::channel::unbounded();
+    set.spawn_blocking(|| write_worker_loop(dataset_recv, files_sink, report));
 
-    std::thread::spawn(|| write_worker_loop(dataset_recv, files_send, report));
-
-    Ok(files_recv)
+    while let Some(handle) = set.join_next().await {
+        handle?;
+    }
+    Ok(())
 }
 
 struct StatementBatch {
@@ -262,7 +270,7 @@ fn prepare_worker_loop(batch_producer: Receiver<StatementBatch>, sink: Sender<RD
 
 fn write_worker_loop(
     producer: Receiver<RDFBDataset>,
-    files_sink: Sender<PathBuf>,
+    files_sink: Option<Sender<(PathBuf, usize)>>,
     report: Option<PrepareStatsReport>,
 ) {
     // The index for output file. Used as `prepared.{:06d}.rdfb`.
@@ -275,7 +283,10 @@ fn write_worker_loop(
 
         let mut file = std::fs::File::create(&filename).unwrap();
         file.write_all(&prepared.data).unwrap();
-        files_sink.send(filename.clone()).ok();
+
+        if let Some(ref sink) = files_sink {
+            sink.send((filename.clone(), prepared.statement_count)).ok();
+        }
 
         if let Some(ref report) = report {
             let filename = filename.clone();

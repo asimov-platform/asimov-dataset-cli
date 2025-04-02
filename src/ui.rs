@@ -1,9 +1,13 @@
 // This is free and unencumbered software released into the public domain.
 
-use std::{collections::VecDeque, path::PathBuf};
+use std::{
+    collections::VecDeque,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 use color_eyre::Result;
-use crossbeam::channel::Receiver;
+use crossbeam::channel::{Receiver, Sender};
 use crossterm::event;
 use ratatui::{
     DefaultTerminal, Frame,
@@ -35,7 +39,7 @@ pub struct Prepare {
 pub struct Publish {
     pub prepare: Option<Prepare>,
 
-    pub queued_files: VecDeque<PathBuf>,
+    pub queued_files: VecDeque<(PathBuf, usize)>,
     pub total_bytes: usize,
 
     pub published_bytes: usize,
@@ -72,6 +76,26 @@ pub enum Event {
     Reader(ReaderProgress),
     Prepare(PrepareProgress),
     Publish(PublishProgress),
+}
+
+pub fn listen_input(tx: &Sender<Event>) {
+    let tick_rate = Duration::from_millis(200);
+    let mut last_tick = Instant::now();
+    loop {
+        // poll for tick rate duration, if no events, sent tick event.
+        let timeout = tick_rate.saturating_sub(last_tick.elapsed());
+        if event::poll(timeout).unwrap() {
+            match event::read().unwrap() {
+                event::Event::Key(key) => tx.send(Event::Input(key)).unwrap(),
+                event::Event::Resize(_, _) => tx.send(Event::Resize).unwrap(),
+                _ => {}
+            };
+        }
+        if last_tick.elapsed() >= tick_rate {
+            tx.send(Event::Tick).unwrap();
+            last_tick = Instant::now();
+        }
+    }
 }
 
 pub fn run_prepare(
@@ -190,12 +214,14 @@ pub fn run_publish(
                     prepare.prepared_statements += progress.statement_count;
                     prepare.prepared_files.push(progress.filename.clone());
                     state.total_bytes += progress.bytes;
-                    state.queued_files.push_back(progress.filename);
+                    state
+                        .queued_files
+                        .push_back((progress.filename, progress.statement_count));
                 }
                 Event::Publish(progress) => {
                     state.published_bytes += progress.bytes;
                     state.published_statements += progress.statement_count;
-                    state.queued_files.retain(|f| *f != progress.filename);
+                    state.queued_files.retain(|(f, _)| *f != progress.filename);
                     state.published_files.push(progress.filename);
                 }
             },
@@ -307,13 +333,16 @@ fn draw_publish(frame: &mut Frame, area: Rect, state: &Publish) {
                 total_statements,
                 (state.published_statements as f32 / total_statements as f32 * 100.0)
             )),
-            Text::from(format!("Published files: {}", state.published_files.len())),
+            Text::from(format!(
+                "Published batches: {}",
+                state.published_files.len()
+            )),
         ]);
 
         frame.render_widget(list, stats_area);
     }
 
-    if let Some(batch) = state.queued_files.iter().next() {
+    if let Some((batch, _)) = state.queued_files.iter().next() {
         let text = Text::from(format!("Next batch: {}", batch.display()));
         frame.render_widget(text, current_batch_area);
     }
