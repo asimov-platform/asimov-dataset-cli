@@ -172,8 +172,10 @@ pub fn run_publish(
                     } else {
                         prepare.current_read_bytes += progress.bytes;
                     }
+
                     prepare.read_bytes += progress.bytes;
-                    prepare.read_statements += progress.statement_count;
+                    prepare.read_statements = progress.statement_count;
+
                     if progress.finished {
                         prepare.queued_files.pop_front();
                         prepare.read_files.push(progress.filename);
@@ -183,11 +185,13 @@ pub fn run_publish(
                     let prepare = state.prepare.as_mut().unwrap();
                     prepare.prepared_bytes += progress.bytes;
                     prepare.prepared_statements += progress.statement_count;
-                    prepare.prepared_files.push(progress.filename);
+                    prepare.prepared_files.push(progress.filename.clone());
+                    state.queued_files.push_back(progress.filename)
                 }
                 Event::Publish(progress) => {
                     state.published_bytes += progress.bytes;
                     state.published_statements += progress.statement_count;
+                    state.queued_files.retain(|f| *f != progress.filename);
                     state.published_files.push(progress.filename);
                 }
             },
