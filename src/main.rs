@@ -269,8 +269,6 @@ impl PublishCommand {
             })
             .collect();
 
-        let total_bytes = unprepared_files.iter().fold(0, |acc, (_, size)| acc + size);
-
         set.spawn_blocking({
             let tx = tx.clone();
             move || ui::listen_input(&tx)
@@ -279,13 +277,21 @@ impl PublishCommand {
         let mut terminal = ratatui::init_with_options(TerminalOptions {
             viewport: ratatui::Viewport::Inline(30),
         });
-        let ui_state = ui::Publish {
-            queued_files: prepared_files,
-            prepare: Some(ui::Prepare {
+        let prepare_state = if unprepared_files.is_empty() {
+            None
+        } else {
+            let total_bytes = unprepared_files.iter().fold(0, |acc, (_, size)| acc + size);
+            Some(ui::Prepare {
                 total_bytes,
                 queued_files: unprepared_files,
                 ..Default::default()
-            }),
+            })
+        };
+        let total_bytes = prepared_files.iter().fold(0, |acc, (_, size)| acc + size);
+        let ui_state = ui::Publish {
+            queued_files: prepared_files,
+            total_bytes,
+            prepare: prepare_state,
             ..Default::default()
         };
 
