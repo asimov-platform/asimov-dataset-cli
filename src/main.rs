@@ -117,7 +117,7 @@ impl PrepareCommand {
     async fn run(self) -> Result<(), Box<dyn std::error::Error>> {
         let start = std::time::Instant::now();
 
-        let (tx, rx) = crossbeam::channel::unbounded();
+        let (event_tx, event_rx) = crossbeam::channel::unbounded();
 
         let mut terminal = ratatui::init_with_options(TerminalOptions {
             viewport: ratatui::Viewport::Inline(30),
@@ -149,11 +149,11 @@ impl PrepareCommand {
         let mut set = JoinSet::new();
 
         set.spawn_blocking({
-            let tx = tx.clone();
+            let tx = event_tx.clone();
             move || ui::listen_input(&tx)
         });
 
-        let report = Some(asimov_dataset_cli::prepare::PrepareStatsReport { tx });
+        let report = Some(asimov_dataset_cli::prepare::PrepareStatsReport { tx: event_tx });
 
         set.spawn(async move {
             asimov_dataset_cli::prepare::prepare_datasets(files.into_iter(), None, report)
@@ -161,11 +161,11 @@ impl PrepareCommand {
                 .expect("`prepare` failed");
         });
 
-        ui::run_prepare(&mut terminal, ui_state, rx).unwrap();
+        ui::run_prepare(&mut terminal, ui_state, event_rx).unwrap();
 
-        let _ = set.join_all().await;
+        // let _ = set.join_all().await;
 
-        ratatui::restore();
+        ratatui::try_restore().unwrap();
 
         debug!(
             duration = ?std::time::Instant::now().duration_since(start),
@@ -209,7 +209,7 @@ impl PublishCommand {
         .expect("failed to get key in keystore");
         let signer = near_api::Signer::new(signer).unwrap();
 
-        let (tx, rx) = crossbeam::channel::unbounded();
+        let (event_tx, event_rx) = crossbeam::channel::unbounded();
 
         let mut set = JoinSet::new();
 
@@ -228,7 +228,7 @@ impl PublishCommand {
 
         if !unprepared_files.is_empty() {
             set.spawn({
-                let tx = tx.clone();
+                let tx = event_tx.clone();
                 let unprepared_files = unprepared_files.clone().into_iter();
                 async move {
                     asimov_dataset_cli::prepare::prepare_datasets(
@@ -245,7 +245,7 @@ impl PublishCommand {
         }
 
         set.spawn({
-            let tx = tx.clone();
+            let tx = event_tx.clone();
             let prepared_files = prepared_files.clone().into_iter();
             async move {
                 asimov_dataset_cli::publish::publish_datasets(
@@ -270,7 +270,7 @@ impl PublishCommand {
             .collect();
 
         set.spawn_blocking({
-            let tx = tx.clone();
+            let tx = event_tx.clone();
             move || ui::listen_input(&tx)
         });
 
@@ -295,11 +295,11 @@ impl PublishCommand {
             ..Default::default()
         };
 
-        ui::run_publish(&mut terminal, ui_state, rx).unwrap();
+        ui::run_publish(&mut terminal, ui_state, event_rx).unwrap();
 
-        let _ = set.join_all().await;
+        // let _ = set.join_all().await;
 
-        ratatui::restore();
+        ratatui::try_restore().unwrap();
 
         Ok(())
     }
