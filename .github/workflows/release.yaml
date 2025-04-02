@@ -48,6 +48,7 @@ jobs:
     continue-on-error: false
     steps:
       - name: Install system dependencies
+        if: startsWith(matrix.os, 'ubuntu')
         run: |
           sudo apt-get update && \
           sudo apt-get install --assume-yes libudev-dev
