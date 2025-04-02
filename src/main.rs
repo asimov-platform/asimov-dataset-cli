@@ -4,7 +4,12 @@
 
 mod feature;
 
-use std::{collections::VecDeque, os::unix::fs::MetadataExt, path::PathBuf};
+use std::{
+    collections::VecDeque,
+    os::unix::fs::MetadataExt,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 use clientele::{
     StandardOptions,
@@ -12,6 +17,7 @@ use clientele::{
     crates::clap::{CommandFactory, Parser, Subcommand},
     exit,
 };
+use crossterm::event;
 use near_api::AccountId;
 use ratatui::TerminalOptions;
 use tracing::debug;
@@ -128,6 +134,33 @@ pub async fn main() {
                     queued_files,
                     ..Default::default()
                 };
+
+                s.spawn({
+                    let tx = tx.clone();
+                    move || {
+                        let tick_rate = Duration::from_millis(200);
+                        let mut last_tick = Instant::now();
+                        loop {
+                            // poll for tick rate duration, if no events, sent tick event.
+                            let timeout = tick_rate.saturating_sub(last_tick.elapsed());
+                            if event::poll(timeout).unwrap() {
+                                match event::read().unwrap() {
+                                    event::Event::Key(key) => {
+                                        tx.send(ui::Event::Input(key)).unwrap()
+                                    }
+                                    event::Event::Resize(_, _) => {
+                                        tx.send(ui::Event::Resize).unwrap()
+                                    }
+                                    _ => {}
+                                };
+                            }
+                            if last_tick.elapsed() >= tick_rate {
+                                tx.send(ui::Event::Tick).unwrap();
+                                last_tick = Instant::now();
+                            }
+                        }
+                    }
+                });
 
                 s.spawn(|| ui::run_prepare(&mut terminal, ui_state, rx));
 

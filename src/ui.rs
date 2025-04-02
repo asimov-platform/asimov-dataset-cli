@@ -66,6 +66,8 @@ pub struct PublishProgress {
 
 pub enum Event {
     Resize,
+    Tick,
+    Input(event::KeyEvent),
     Reader(ReaderProgress),
     Prepare(PrepareProgress),
     Publish(PublishProgress),
@@ -82,7 +84,13 @@ pub fn run_prepare(
         match rx.recv() {
             Err(_) => return Ok(()),
             Ok(event) => match event {
-                Event::Resize => todo!(),
+                Event::Input(event) => {
+                    if event.code == event::KeyCode::Char('q') {
+                        break Ok(());
+                    }
+                }
+                Event::Tick => {}
+                Event::Resize => terminal.autoresize()?,
                 Event::Reader(progress) => {
                     if state.current_file != progress.filename {
                         let (_file, size) = state
@@ -137,6 +145,12 @@ pub fn run_publish(
         match rx.recv() {
             Err(_) => return Ok(()),
             Ok(event) => match event {
+                Event::Input(event) => {
+                    if event.code == event::KeyCode::Char('q') {
+                        break Ok(());
+                    }
+                }
+                Event::Tick => {}
                 Event::Resize => terminal.autoresize()?,
                 Event::Reader(progress) => {
                     let prepare = state.prepare.as_mut().unwrap();
