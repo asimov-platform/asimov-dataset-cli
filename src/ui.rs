@@ -85,14 +85,22 @@ pub fn listen_input(tx: &Sender<Event>) {
         // poll for tick rate duration, if no events, sent tick event.
         let timeout = tick_rate.saturating_sub(last_tick.elapsed());
         if event::poll(timeout).unwrap() {
-            match event::read().unwrap() {
-                event::Event::Key(key) => tx.send(Event::Input(key)).unwrap(),
-                event::Event::Resize(_, _) => tx.send(Event::Resize).unwrap(),
-                _ => {}
+            let Some(event) = event::read()
+                .map(|event| match event {
+                    event::Event::Key(key) => Some(Event::Input(key)),
+                    event::Event::Resize(_, _) => Some(Event::Resize),
+                    _ => None,
+                })
+                .unwrap()
+            else {
+                continue;
             };
+            if tx.send(event).is_err() {
+                break;
+            }
         }
         if last_tick.elapsed() >= tick_rate {
-            tx.send(Event::Tick).unwrap();
+            tx.send(Event::Tick).ok();
             last_tick = Instant::now();
         }
     }

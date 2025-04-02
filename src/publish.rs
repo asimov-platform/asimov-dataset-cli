@@ -53,7 +53,7 @@ where
         //         |outcome| tracing::info!(?file, status = ?outcome.transaction_outcome.outcome.status, "uploaded dataset"),
         //     )?;
 
-        std::thread::sleep(Duration::from_millis(500));
+        std::thread::sleep(Duration::from_millis(200));
 
         if let Some(ref report) = report {
             report
@@ -63,7 +63,7 @@ where
                     bytes,
                     statement_count,
                 }))
-                .unwrap();
+                .ok();
         }
     }
     Ok(())

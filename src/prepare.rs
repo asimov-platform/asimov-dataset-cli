@@ -28,31 +28,31 @@ pub struct PrepareStatsReport {
 
 pub async fn prepare_datasets<I>(
     files: I,
-    files_sink: Option<Sender<(PathBuf, usize)>>,
+    files_tx: Option<Sender<(PathBuf, usize)>>,
     report: Option<PrepareStatsReport>,
 ) -> Result<(), Box<dyn Error>>
 where
     I: Iterator<Item = PathBuf>,
 {
-    let (batch_send, batch_recv) = crossbeam::channel::bounded(100);
+    let (batch_tx, batch_rx) = crossbeam::channel::bounded(100);
 
     let mut set = JoinSet::new();
 
     set.spawn_blocking({
         let files: Vec<PathBuf> = files.collect();
         let report = report.clone();
-        move || read_worker_loop(&files, batch_send, report)
+        move || read_worker_loop(&files, batch_tx, report)
     });
 
-    let (dataset_send, dataset_recv) = crossbeam::channel::bounded(10);
+    let (dataset_tx, dataset_rx) = crossbeam::channel::bounded(10);
 
     for _ in 0..4 {
-        let batch_recv = batch_recv.clone();
-        let dataset_send = dataset_send.clone();
-        set.spawn_blocking(|| prepare_worker_loop(batch_recv, dataset_send));
+        let batch_rx = batch_rx.clone();
+        let dataset_tx = dataset_tx.clone();
+        set.spawn_blocking(|| prepare_worker_loop(batch_rx, dataset_tx));
     }
 
-    set.spawn_blocking(|| write_worker_loop(dataset_recv, files_sink, report));
+    set.spawn_blocking(|| write_worker_loop(dataset_rx, files_tx, report));
 
     while let Some(handle) = set.join_next().await {
         handle?;
@@ -72,7 +72,7 @@ struct RDFBDataset {
 
 fn read_worker_loop(
     files: &[PathBuf],
-    sink: Sender<StatementBatch>,
+    batch_tx: Sender<StatementBatch>,
     report: Option<PrepareStatsReport>,
 ) {
     struct CountingBufReader<R> {
@@ -94,6 +94,7 @@ fn read_worker_loop(
         }
     }
 
+    let batch_size = 100_000;
     let mut statement_index: usize = 0;
 
     for file in files {
@@ -103,12 +104,10 @@ fn read_worker_loop(
             .and_then(oxrdfio::RdfFormat::from_extension)
             .unwrap();
         let reader = File::open(file).unwrap();
-        let reader = BufReader::with_capacity(1 << 1, reader);
+        let reader = BufReader::with_capacity(1 << 20, reader);
         let count = Rc::new(RefCell::new(0));
         let reader = CountingBufReader::new(reader, count.clone());
         let mut reader = oxrdfio::RdfParser::from_format(format).for_reader(reader);
-
-        let batch_size = 100_000;
 
         loop {
             let mut quads = Vec::with_capacity(batch_size);
@@ -125,6 +124,10 @@ fn read_worker_loop(
                 }
             };
 
+            if finished && quads.is_empty() && *count.borrow() == 0 {
+                break;
+            }
+
             if let Some(ref report) = report {
                 let mut bytes = count.borrow_mut();
                 report
@@ -135,20 +138,16 @@ fn read_worker_loop(
                         statement_count: statement_index,
                         finished,
                     }))
-                    .unwrap();
+                    .ok();
                 *bytes = 0;
             }
 
-            if finished && quads.is_empty() {
-                break;
-            }
-
-            sink.send(StatementBatch { quads }).unwrap();
+            batch_tx.send(StatementBatch { quads }).unwrap();
         }
     }
 }
 
-fn prepare_worker_loop(batch_producer: Receiver<StatementBatch>, sink: Sender<RDFBDataset>) {
+fn prepare_worker_loop(batch_rx: Receiver<StatementBatch>, dataset_tx: Sender<RDFBDataset>) {
     // Buffer for storing statements that need to be retried
     let mut statement_buffer: VecDeque<(usize, Box<dyn Statement>)> = VecDeque::new();
     // write_count is how many we're trying to serialize each iteration
@@ -167,7 +166,7 @@ fn prepare_worker_loop(batch_producer: Receiver<StatementBatch>, sink: Sender<RD
 
     loop {
         while have_more && (statement_buffer.len() < write_count) {
-            let Ok(batch) = batch_producer.recv() else {
+            let Ok(batch) = batch_rx.recv() else {
                 have_more = false;
                 break;
             };
@@ -253,11 +252,12 @@ fn prepare_worker_loop(batch_producer: Receiver<StatementBatch>, sink: Sender<RD
             }
         }
 
-        sink.send(RDFBDataset {
-            data,
-            statement_count: try_write_count,
-        })
-        .unwrap();
+        dataset_tx
+            .send(RDFBDataset {
+                data,
+                statement_count: try_write_count,
+            })
+            .unwrap();
 
         statement_buffer.drain(..try_write_count);
 
@@ -270,7 +270,7 @@ fn prepare_worker_loop(batch_producer: Receiver<StatementBatch>, sink: Sender<RD
 
 fn write_worker_loop(
     producer: Receiver<RDFBDataset>,
-    files_sink: Option<Sender<(PathBuf, usize)>>,
+    files_tx: Option<Sender<(PathBuf, usize)>>,
     report: Option<PrepareStatsReport>,
 ) {
     // The index for output file. Used as `prepared.{:06d}.rdfb`.
@@ -284,8 +284,8 @@ fn write_worker_loop(
         let mut file = std::fs::File::create(&filename).unwrap();
         file.write_all(&prepared.data).unwrap();
 
-        if let Some(ref sink) = files_sink {
-            sink.send((filename.clone(), prepared.statement_count)).ok();
+        if let Some(ref tx) = files_tx {
+            tx.send((filename.clone(), prepared.statement_count)).ok();
         }
 
         if let Some(ref report) = report {
