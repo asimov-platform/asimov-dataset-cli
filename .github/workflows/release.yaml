@@ -50,6 +50,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     continue-on-error: false
     steps:
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libudev-dev
+
       - name: Build
         uses: asimov-platform/build-rust-action@v2
         with:
