@@ -19,7 +19,7 @@ use ratatui::{
 
 #[derive(Debug, Default)]
 pub struct Prepare {
-    pub current_file: PathBuf,
+    pub current_file: Option<PathBuf>,
     pub current_file_size: usize,
     pub current_read_bytes: usize,
 
@@ -117,18 +117,21 @@ pub fn run_prepare(
                 Event::Tick => {}
                 Event::Resize => terminal.autoresize()?,
                 Event::Reader(progress) => {
-                    if state.current_file != progress.filename {
-                        let size = state
-                            .queued_files
-                            .iter()
-                            .find(|(name, _size)| *name == progress.filename)
-                            .unwrap()
-                            .1;
-                        state.current_file = progress.filename.clone();
-                        state.current_file_size = size;
-                        state.current_read_bytes = progress.bytes;
-                    } else {
-                        state.current_read_bytes += progress.bytes;
+                    match state.current_file {
+                        Some(ref curr) if *curr == progress.filename => {
+                            state.current_read_bytes += progress.bytes;
+                        }
+                        _ => {
+                            let size = state
+                                .queued_files
+                                .iter()
+                                .find(|(name, _size)| *name == progress.filename)
+                                .unwrap()
+                                .1;
+                            state.current_file = Some(progress.filename.clone());
+                            state.current_file_size = size;
+                            state.current_read_bytes = progress.bytes;
+                        }
                     }
 
                     state.read_bytes += progress.bytes;
@@ -139,6 +142,7 @@ pub fn run_prepare(
                             .queued_files
                             .retain(|(name, _size)| *name != progress.filename);
                         state.read_files.push(progress.filename);
+                        state.current_file = None;
                     }
                 }
                 Event::Prepare(progress) => {
@@ -184,18 +188,22 @@ pub fn run_publish(
                 Event::Resize => terminal.autoresize()?,
                 Event::Reader(progress) => {
                     let prepare = state.prepare.as_mut().unwrap();
-                    if prepare.current_file != progress.filename {
-                        let size = prepare
-                            .queued_files
-                            .iter()
-                            .find(|(name, _size)| *name == progress.filename)
-                            .unwrap()
-                            .1;
-                        prepare.current_file = progress.filename.clone();
-                        prepare.current_file_size = size;
-                        prepare.current_read_bytes = progress.bytes;
-                    } else {
-                        prepare.current_read_bytes += progress.bytes;
+
+                    match prepare.current_file {
+                        Some(ref curr) if *curr == progress.filename => {
+                            prepare.current_read_bytes += progress.bytes;
+                        }
+                        _ => {
+                            let size = prepare
+                                .queued_files
+                                .iter()
+                                .find(|(name, _size)| *name == progress.filename)
+                                .unwrap()
+                                .1;
+                            prepare.current_file = Some(progress.filename.clone());
+                            prepare.current_file_size = size;
+                            prepare.current_read_bytes = progress.bytes;
+                        }
                     }
 
                     prepare.read_bytes += progress.bytes;
@@ -206,6 +214,7 @@ pub fn run_publish(
                             .queued_files
                             .retain(|(name, _size)| *name != progress.filename);
                         prepare.read_files.push(progress.filename);
+                        prepare.current_file = None;
                     }
                 }
                 Event::Prepare(progress) => {
@@ -270,10 +279,10 @@ fn draw_prepare(frame: &mut Frame, area: Rect, state: &Prepare) {
         frame.render_widget(list, stats_area);
     }
 
-    if state.current_read_bytes > 0 {
+    if let Some(ref current_file) = state.current_file {
         let [text_area, gauge_area] =
             Layout::horizontal([Constraint::Fill(1), Constraint::Fill(1)]).areas(current_file_area);
-        let text = Text::from(format!("Processing file {}", state.current_file.display()));
+        let text = Text::from(format!("Processing file {}", current_file.display()));
         frame.render_widget(text, text_area);
         let gauge = Gauge::default()
             .gauge_style(Style::default().fg(Color::LightGreen))
@@ -318,7 +327,7 @@ fn draw_publish(frame: &mut Frame, area: Rect, state: &Publish) {
         let list = List::new([
             Text::from(format!("Queued batches: {}", state.queued_files.len())),
             Text::from(format!(
-                "Published bytes: {} / {} total ({:>2}%)",
+                "Published bytes: {} / {} total ({:>2.0}%)",
                 state.published_bytes,
                 state.total_bytes,
                 if state.total_bytes > 0 {
@@ -328,7 +337,7 @@ fn draw_publish(frame: &mut Frame, area: Rect, state: &Publish) {
                 }
             )),
             Text::from(format!(
-                "Published statements: {} / {} ({:>2}%)",
+                "Published statements: {} / {} ({:>2.0}%)",
                 state.published_statements,
                 total_statements,
                 (state.published_statements as f32 / total_statements as f32 * 100.0)
