@@ -8,37 +8,36 @@ use near_api::{
 };
 use std::{error::Error, io::Read, path::PathBuf, sync::Arc, time::Duration};
 
-use crate::prepare::{PrepareStatsReport, prepare_datasets};
-
 #[derive(Clone, Debug)]
 pub struct PublishStatsReport {
     pub tx: Sender<crate::ui::Event>,
 }
 
-pub async fn publish_datasets(
+/// Splits the files into (prepared, unprepared) according to their file extension.
+pub fn split_prepared_files(files: &[PathBuf]) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    files
+        .iter()
+        .cloned()
+        .partition(|file| file.extension().is_some_and(|ext| ext == "rdfb"))
+}
+
+pub async fn publish_datasets<I>(
     repository: AccountId,
     signer: Arc<near_api::Signer>,
     network: &NetworkConfig,
-    files: &[PathBuf],
-    report: Option<(PrepareStatsReport, PublishStatsReport)>,
-) -> Result<(), Box<dyn Error>> {
-    let (prepared, unprepared): (Vec<_>, Vec<_>) = files
-        .iter()
-        .cloned()
-        .partition(|file| file.extension().is_some_and(|ext| ext == "rdfb"));
-
-    let prepared_files =
-        prepare_datasets(&unprepared, report.clone().map(|report| report.0)).unwrap();
-
-    let files = prepared.into_iter().chain(prepared_files);
-
-    for file in files {
+    files: I,
+    report: Option<PublishStatsReport>,
+) -> Result<(), Box<dyn Error>>
+where
+    I: Iterator<Item = PathBuf>,
+{
+    for filename in files {
         let mut args = Vec::new();
         1_u8.serialize(&mut args)?; // version 1
         "".serialize(&mut args)?;
         1_u8.serialize(&mut args)?; // RDF/Borsh dataset encoding
 
-        let bytes = std::fs::File::open(&file)?.read_to_end(&mut args)?;
+        let bytes = std::fs::File::open(&filename)?.read_to_end(&mut args)?;
 
         // let _tx_outcome = Transaction::construct(repository.clone(), repository.clone())
         //     .add_action(Action::FunctionCall(Box::new(FunctionCallAction {
@@ -56,11 +55,11 @@ pub async fn publish_datasets(
 
         std::thread::sleep(Duration::from_millis(500));
 
-        if let Some((_, ref report)) = report {
+        if let Some(ref report) = report {
             report
                 .tx
                 .send(crate::ui::Event::Publish(crate::ui::PublishProgress {
-                    filename: file,
+                    filename,
                     bytes,
                     statement_count: 0,
                 }))

@@ -161,13 +161,14 @@ pub fn run_publish(
                 Event::Reader(progress) => {
                     let prepare = state.prepare.as_mut().unwrap();
                     if prepare.current_file != progress.filename {
-                        let (_file, size) = prepare
+                        let size = prepare
                             .queued_files
                             .iter()
-                            .find(|name| name.0 == progress.filename)
-                            .unwrap();
+                            .find(|(name, _size)| *name == progress.filename)
+                            .unwrap()
+                            .1;
                         prepare.current_file = progress.filename.clone();
-                        prepare.current_file_size = *size;
+                        prepare.current_file_size = size;
                         prepare.current_read_bytes = progress.bytes;
                     } else {
                         prepare.current_read_bytes += progress.bytes;
@@ -177,7 +178,9 @@ pub fn run_publish(
                     prepare.read_statements = progress.statement_count;
 
                     if progress.finished {
-                        prepare.queued_files.pop_front();
+                        prepare
+                            .queued_files
+                            .retain(|(name, _size)| *name != progress.filename);
                         prepare.read_files.push(progress.filename);
                     }
                 }
@@ -186,7 +189,8 @@ pub fn run_publish(
                     prepare.prepared_bytes += progress.bytes;
                     prepare.prepared_statements += progress.statement_count;
                     prepare.prepared_files.push(progress.filename.clone());
-                    state.queued_files.push_back(progress.filename)
+                    state.total_bytes += progress.bytes;
+                    state.queued_files.push_back(progress.filename);
                 }
                 Event::Publish(progress) => {
                     state.published_bytes += progress.bytes;
@@ -233,7 +237,7 @@ fn draw_prepare(frame: &mut Frame, area: Rect, state: &Prepare) {
                 state.read_statements,
                 (state.prepared_statements as f32 / state.read_statements as f32 * 100.0)
             )),
-            Text::from(format!("Created batches: {}", state.prepared_files.len())),
+            Text::from(format!("Prepared batches: {}", state.prepared_files.len())),
             Text::from(format!("Size of batches: {} bytes", state.prepared_bytes)),
         ]);
 
@@ -261,10 +265,14 @@ fn draw_prepare(frame: &mut Frame, area: Rect, state: &Prepare) {
 }
 
 fn draw_publish(frame: &mut Frame, area: Rect, state: &Publish) {
-    let [title_area, stats_area] = Layout::vertical([Constraint::Length(1), Constraint::Length(6)])
-        .margin(1)
-        .spacing(1)
-        .areas(area);
+    let [title_area, stats_area, current_batch_area] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(4),
+        Constraint::Length(1),
+    ])
+    .margin(1)
+    .spacing(1)
+    .areas(area);
 
     let [_padding, stats_area] =
         Layout::horizontal([Constraint::Length(3), Constraint::Min(0)]).areas(stats_area);
@@ -282,7 +290,7 @@ fn draw_publish(frame: &mut Frame, area: Rect, state: &Publish) {
         };
 
         let list = List::new([
-            Text::from(format!("Queued files: {}", state.queued_files.len())),
+            Text::from(format!("Queued batches: {}", state.queued_files.len())),
             Text::from(format!(
                 "Published bytes: {} / {} total ({:>2}%)",
                 state.published_bytes,
@@ -303,5 +311,10 @@ fn draw_publish(frame: &mut Frame, area: Rect, state: &Publish) {
         ]);
 
         frame.render_widget(list, stats_area);
+    }
+
+    if let Some(batch) = state.queued_files.iter().next() {
+        let text = Text::from(format!("Next batch: {}", batch.display()));
+        frame.render_widget(text, current_batch_area);
     }
 }
