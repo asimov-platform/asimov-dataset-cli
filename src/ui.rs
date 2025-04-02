@@ -218,7 +218,7 @@ fn draw_prepare(frame: &mut Frame, area: Rect, state: &Prepare) {
 
     if state.current_read_bytes > 0 {
         let [text_area, gauge_area] =
-            Layout::horizontal([Constraint::Fill(1), Constraint::Fill(2)]).areas(current_file_area);
+            Layout::horizontal([Constraint::Fill(1), Constraint::Fill(1)]).areas(current_file_area);
         let text = Text::from(format!("Processing file {}", state.current_file.display()));
         frame.render_widget(text, text_area);
         let gauge = Gauge::default()

@@ -1,5 +1,6 @@
 // This is free and unencumbered software released into the public domain.
 
+use crossbeam::channel::{Receiver, Sender};
 use rdf_rs::model::Statement;
 use rdf_writer::Writer;
 use std::{
@@ -10,7 +11,6 @@ use std::{
     io::{BufReader, Write},
     path::PathBuf,
     rc::Rc,
-    sync::mpsc,
 };
 use tracing::info;
 
@@ -20,49 +20,40 @@ const MAX_FILE_SIZE: usize = 1_572_864 - 1024;
 /// Controls how close we want the serialized result to be to MAX_FILE_SIZE.
 const ACCEPTABLE_RATIO: f64 = 0.95;
 
-pub fn prepare_datasets(files: &[String]) -> Result<(), Box<dyn Error>> {
-    std::thread::scope(|s| {
-        let (batch_req_send, batch_req_recv) = mpsc::sync_channel(10);
-        let (dataset_send, dataset_recv) = mpsc::sync_channel(10);
-
-        let files: Vec<String> = files.to_vec();
-        let producer = files
-            .into_iter()
-            .map(|file| {
-                let file = PathBuf::from(file);
-                let format = file
-                    .extension()
-                    .and_then(std::ffi::OsStr::to_str)
-                    .and_then(oxrdfio::RdfFormat::from_extension);
-                (file, format)
-            })
-            .flat_map(|(file, format)| {
-                let reader = File::open(file).map(BufReader::new).unwrap();
-                oxrdfio::RdfParser::from_format(format.unwrap()).for_reader(reader)
-            })
-            .flatten();
-
-        s.spawn(|| read_worker_loop(producer, batch_req_recv));
-
-        for _ in 0..4 {
-            let batch_req_send = batch_req_send.clone();
-            let dataset_send = dataset_send.clone();
-            s.spawn(|| prepare_worker_loop(batch_req_send, dataset_send));
-        }
-
-        s.spawn(|| write_worker_loop(dataset_recv));
-    });
-
-    Ok(())
+#[derive(Clone, Debug)]
+pub struct PrepareStatsReport {
+    pub tx: Sender<crate::ui::Event>,
 }
 
-struct StatementBatchRequest {
-    amount: usize,
-    response_chan: oneshot::Sender<StatementBatch>,
+pub fn prepare_datasets(
+    files: &[String],
+    report: Option<PrepareStatsReport>,
+) -> Result<Receiver<PathBuf>, Box<dyn Error>> {
+    let (batch_send, batch_recv) = crossbeam::channel::bounded(100);
+
+    std::thread::spawn({
+        let files = files.to_vec();
+        let report = report.clone();
+        move || read_worker_loop(&files, batch_send, report)
+    });
+
+    let (dataset_send, dataset_recv) = crossbeam::channel::bounded(10);
+
+    for _ in 0..4 {
+        let batch_recv = batch_recv.clone();
+        let dataset_send = dataset_send.clone();
+        std::thread::spawn(|| prepare_worker_loop(batch_recv, dataset_send));
+    }
+
+    let (files_send, files_recv) = crossbeam::channel::unbounded();
+
+    std::thread::spawn(|| write_worker_loop(dataset_recv, files_send, report));
+
+    Ok(files_recv)
 }
 
 struct StatementBatch {
-    quads: Vec<oxrdf::Quad>,
+    quads: Vec<(usize, oxrdf::Quad)>,
 }
 
 #[derive(Default)]
@@ -71,33 +62,87 @@ struct RDFBDataset {
     statement_count: usize,
 }
 
-fn read_worker_loop<I>(mut producer: I, requests: mpsc::Receiver<StatementBatchRequest>)
-where
-    I: Iterator<Item = oxrdf::Quad>,
-{
-    while let Ok(req) = requests.recv() {
-        let mut quads: Vec<oxrdf::Quad> = Vec::with_capacity(req.amount);
+fn read_worker_loop(
+    files: &[String],
+    sink: Sender<StatementBatch>,
+    report: Option<PrepareStatsReport>,
+) {
+    struct CountingBufReader<R> {
+        inner: BufReader<R>,
+        count: Rc<RefCell<usize>>,
+    }
 
-        while quads.len() < req.amount {
-            if let Some(quad) = producer.next() {
-                quads.push(quad);
-            } else {
-                req.response_chan.send(StatementBatch { quads }).unwrap();
-                return;
-            }
+    impl<R> CountingBufReader<R> {
+        fn new(inner: BufReader<R>, count: Rc<RefCell<usize>>) -> Self {
+            Self { inner, count }
         }
+    }
 
-        req.response_chan.send(StatementBatch { quads }).unwrap();
+    impl<R: std::io::Read> std::io::Read for CountingBufReader<R> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let count = self.inner.read(buf)?;
+            let mut total = self.count.borrow_mut();
+            *total += count;
+            Ok(count)
+        }
+    }
+
+    let mut statement_index: usize = 0;
+
+    for file in files {
+        let format = PathBuf::from(file)
+            .extension()
+            .and_then(std::ffi::OsStr::to_str)
+            .and_then(oxrdfio::RdfFormat::from_extension)
+            .unwrap();
+        let reader = File::open(file).unwrap();
+        let reader = BufReader::with_capacity(1 << 1, reader);
+        let count = Rc::new(RefCell::new(0));
+        let reader = CountingBufReader::new(reader, count.clone());
+        let mut reader = oxrdfio::RdfParser::from_format(format).for_reader(reader);
+
+        let batch_size = 100_000;
+
+        loop {
+            let mut quads = Vec::with_capacity(batch_size);
+
+            let finished = loop {
+                let Some(quad) = reader.next() else {
+                    break true;
+                };
+                let quad = quad.unwrap();
+                quads.push((statement_index, quad));
+                statement_index += 1;
+                if quads.len() >= batch_size {
+                    break false;
+                }
+            };
+
+            if let Some(ref report) = report {
+                let bytes = *count.borrow();
+                report
+                    .tx
+                    .send(crate::ui::Event::Reader(crate::ui::ReaderProgress {
+                        filename: PathBuf::from(file),
+                        bytes,
+                        statement_count: statement_index + 1,
+                        finished,
+                    }))
+                    .unwrap();
+            }
+
+            if finished && quads.is_empty() {
+                break;
+            }
+
+            sink.send(StatementBatch { quads }).unwrap();
+        }
     }
 }
 
-fn prepare_worker_loop(
-    // producer: Arc<Mutex<std::sync::mpsc::Receiver<StatementBatch>>>,
-    batch_requests: mpsc::SyncSender<StatementBatchRequest>,
-    sink: mpsc::SyncSender<RDFBDataset>,
-) {
+fn prepare_worker_loop(batch_producer: Receiver<StatementBatch>, sink: Sender<RDFBDataset>) {
     // Buffer for storing statements that need to be retried
-    let mut statement_buffer: VecDeque<Box<dyn Statement>> = VecDeque::new();
+    let mut statement_buffer: VecDeque<(usize, Box<dyn Statement>)> = VecDeque::new();
     // write_count is how many we're trying to serialize each iteration
     let mut write_count: usize = 1;
     // write_count_delta controls how we update write_count if the resulting data is either too
@@ -105,7 +150,7 @@ fn prepare_worker_loop(
     let mut write_count_delta: usize = 1;
     // lowest_overflow is the lowest known write_count where result data is too large
     let mut lowest_overflow: usize = usize::MAX;
-    // have_more states whether the iterator has more items
+    // have_more states whether the producer has more items
     let mut have_more = true;
     // best_ratio contains the best known (non-overflowing) size ratio for each iteration.
     // It's used to quit early in the case where adding one more statement overflows but current
@@ -114,24 +159,11 @@ fn prepare_worker_loop(
 
     loop {
         while have_more && (statement_buffer.len() < write_count) {
-            let (batch_send, batch_recv) = oneshot::channel();
-            if batch_requests
-                .send(StatementBatchRequest {
-                    amount: write_count - statement_buffer.len(),
-                    response_chan: batch_send,
-                })
-                .is_err()
-            {
-                have_more = false;
-                break;
-            }
-            let Ok(batch) = batch_recv.recv() else {
+            let Ok(batch) = batch_producer.recv() else {
                 have_more = false;
                 break;
             };
-            for statement in batch.quads {
-                statement_buffer.push_back(statement.into());
-            }
+            statement_buffer.extend(batch.quads.into_iter().map(|(i, stmt)| (i, stmt.into())));
         }
 
         if statement_buffer.is_empty() {
@@ -139,7 +171,8 @@ fn prepare_worker_loop(
         }
 
         let try_write_count = write_count.min(statement_buffer.len());
-        let ser_result = serialize_statements(statement_buffer.range(..try_write_count));
+        let ser_result =
+            serialize_statements(statement_buffer.range(..try_write_count).map(|(_, x)| x));
 
         let too_large = match ser_result {
             Ok(ref data) => data.len() > MAX_FILE_SIZE,
@@ -150,13 +183,10 @@ fn prepare_worker_loop(
             // current size is larger than max
 
             if write_count == 1 {
-                let _stmt = statement_buffer.pop_front();
-                // let statement_number = total_written + 1;
-                // warn!(
-                //     ?statement_number,
-                //     "statement is too large to be published even alone"
-                // );
-                continue;
+                if let Some((index, _)) = statement_buffer.pop_front() {
+                    tracing::warn!(?index, "statement is too large to be published even alone");
+                    continue;
+                }
             }
             lowest_overflow = lowest_overflow.min(write_count);
 
@@ -230,16 +260,35 @@ fn prepare_worker_loop(
     }
 }
 
-fn write_worker_loop(producer: mpsc::Receiver<RDFBDataset>) {
+fn write_worker_loop(
+    producer: Receiver<RDFBDataset>,
+    files_sink: Sender<PathBuf>,
+    report: Option<PrepareStatsReport>,
+) {
     // The index for output file. Used as `prepared.{:06d}.rdfb`.
     let mut file_idx: usize = 1;
     let mut total_written: usize = 0;
     while let Ok(prepared) = producer.recv() {
         let filename = format!("prepared.{:06}.rdfb", file_idx);
-        std::fs::File::create(&filename)
-            .unwrap()
-            .write_all(&prepared.data)
-            .unwrap();
+
+        let filename = PathBuf::from(filename.clone());
+
+        let mut file = std::fs::File::create(&filename).unwrap();
+        file.write_all(&prepared.data).unwrap();
+        files_sink.send(filename.clone()).ok();
+
+        if let Some(ref report) = report {
+            let filename = filename.clone();
+            report
+                .tx
+                .send(crate::ui::Event::Prepare(crate::ui::PrepareProgress {
+                    filename,
+                    bytes: prepared.data.len(),
+                    statement_count: prepared.statement_count,
+                }))
+                .ok();
+        }
+
         total_written += prepared.statement_count;
         let ratio = prepared.data.len() as f64 / MAX_FILE_SIZE as f64;
         info!(
@@ -247,7 +296,7 @@ fn write_worker_loop(producer: mpsc::Receiver<RDFBDataset>) {
             batch_statement_count = prepared.statement_count,
             total_statement_count = total_written,
             ratio,
-            filename,
+            ?filename,
             "Writing file"
         );
         file_idx += 1;
@@ -255,7 +304,7 @@ fn write_worker_loop(producer: mpsc::Receiver<RDFBDataset>) {
 }
 
 struct SharedBufferWriter {
-    buffer: Rc<std::cell::RefCell<Vec<u8>>>,
+    buffer: Rc<RefCell<Vec<u8>>>,
 }
 
 impl Default for SharedBufferWriter {

@@ -4,6 +4,8 @@
 
 mod feature;
 
+use std::{collections::VecDeque, os::unix::fs::MetadataExt, path::PathBuf};
+
 use clientele::{
     StandardOptions,
     SysexitsError::*,
@@ -11,6 +13,7 @@ use clientele::{
     exit,
 };
 use near_api::AccountId;
+use ratatui::TerminalOptions;
 use tracing::debug;
 
 /// ASIMOV Dataset Command-Line Interface (CLI)
@@ -68,7 +71,7 @@ pub async fn main() {
     // Load environment variables from `.env`:
     let _ = clientele::dotenv();
 
-    tracing_subscriber::fmt::init();
+    // tracing_subscriber::fmt::init();
 
     // Expand wildcards and @argfiles:
     let Ok(args) = clientele::args_os() else {
@@ -99,7 +102,43 @@ pub async fn main() {
     match options.command {
         Some(Command::Prepare(PrepareCommand { files })) => {
             let start = std::time::Instant::now();
-            asimov_dataset_cli::prepare::prepare_datasets(&files).expect("`prepare` failed");
+
+            let (tx, rx) = crossbeam::channel::unbounded();
+
+            let mut terminal = ratatui::init_with_options(TerminalOptions {
+                viewport: ratatui::Viewport::Inline(30),
+            });
+
+            std::thread::scope(|s| {
+                let queued_files: VecDeque<(PathBuf, usize)> = files
+                    .iter()
+                    .map(|file| {
+                        (
+                            PathBuf::from(file),
+                            std::fs::metadata(file).unwrap().size() as usize,
+                        )
+                    })
+                    .collect();
+
+                let total_bytes = queued_files.iter().fold(0, |acc, (_, size)| acc + size);
+
+                use asimov_dataset_cli::ui;
+                let ui_state = ui::Prepare {
+                    total_bytes,
+                    queued_files,
+                    ..Default::default()
+                };
+
+                s.spawn(|| ui::run_prepare(&mut terminal, ui_state, rx));
+
+                let report = Some(asimov_dataset_cli::prepare::PrepareStatsReport { tx });
+
+                let _files = asimov_dataset_cli::prepare::prepare_datasets(&files, report)
+                    .expect("`prepare` failed");
+            });
+
+            ratatui::restore();
+
             debug!(
                 duration = ?std::time::Instant::now().duration_since(start),
                 "Prepare finished"
