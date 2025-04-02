@@ -52,7 +52,7 @@ jobs:
     steps:
       - name: Install system dependencies
         run: |
-          apt install libudev-dev
+          sudo apt install libudev-dev
 
       - name: Build
         uses: asimov-platform/build-rust-action@v2
