@@ -26,7 +26,7 @@ pub struct PrepareStatsReport {
 }
 
 pub fn prepare_datasets(
-    files: &[String],
+    files: &[PathBuf],
     report: Option<PrepareStatsReport>,
 ) -> Result<Receiver<PathBuf>, Box<dyn Error>> {
     let (batch_send, batch_recv) = crossbeam::channel::bounded(100);
@@ -63,7 +63,7 @@ struct RDFBDataset {
 }
 
 fn read_worker_loop(
-    files: &[String],
+    files: &[PathBuf],
     sink: Sender<StatementBatch>,
     report: Option<PrepareStatsReport>,
 ) {
@@ -81,8 +81,7 @@ fn read_worker_loop(
     impl<R: std::io::Read> std::io::Read for CountingBufReader<R> {
         fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
             let count = self.inner.read(buf)?;
-            let mut total = self.count.borrow_mut();
-            *total += count;
+            *self.count.borrow_mut() += count;
             Ok(count)
         }
     }
@@ -90,7 +89,7 @@ fn read_worker_loop(
     let mut statement_index: usize = 0;
 
     for file in files {
-        let format = PathBuf::from(file)
+        let format = file
             .extension()
             .and_then(std::ffi::OsStr::to_str)
             .and_then(oxrdfio::RdfFormat::from_extension)
@@ -119,17 +118,17 @@ fn read_worker_loop(
             };
 
             if let Some(ref report) = report {
-                let bytes = *count.borrow();
+                let mut bytes = count.borrow_mut();
                 report
                     .tx
                     .send(crate::ui::Event::Reader(crate::ui::ReaderProgress {
                         filename: PathBuf::from(file),
-                        bytes,
-                        statement_count: statement_index + 1,
+                        bytes: *bytes,
                         statement_count: statement_index,
                         finished,
                     }))
                     .unwrap();
+                *bytes = 0;
             }
 
             if finished && quads.is_empty() {

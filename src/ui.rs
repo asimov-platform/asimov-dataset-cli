@@ -4,6 +4,7 @@ use std::{collections::VecDeque, path::PathBuf};
 
 use color_eyre::Result;
 use crossbeam::channel::Receiver;
+use crossterm::event;
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout, Rect},
@@ -93,21 +94,26 @@ pub fn run_prepare(
                 Event::Resize => terminal.autoresize()?,
                 Event::Reader(progress) => {
                     if state.current_file != progress.filename {
-                        let (_file, size) = state
+                        let size = state
                             .queued_files
                             .iter()
-                            .find(|name| name.0 == progress.filename)
-                            .unwrap();
+                            .find(|(name, _size)| *name == progress.filename)
+                            .unwrap()
+                            .1;
                         state.current_file = progress.filename.clone();
-                        state.current_file_size = *size;
+                        state.current_file_size = size;
                         state.current_read_bytes = progress.bytes;
                     } else {
                         state.current_read_bytes += progress.bytes;
                     }
+
                     state.read_bytes += progress.bytes;
-                    state.read_statements += progress.statement_count;
+                    state.read_statements = progress.statement_count;
+
                     if progress.finished {
-                        state.queued_files.pop_front();
+                        state
+                            .queued_files
+                            .retain(|(name, _size)| *name != progress.filename);
                         state.read_files.push(progress.filename);
                     }
                 }
@@ -211,14 +217,14 @@ fn draw_prepare(frame: &mut Frame, area: Rect, state: &Prepare) {
         let list = List::new([
             Text::from(format!("Queued files: {}", state.queued_files.len())),
             Text::from(format!(
-                "Read bytes: {} / {} total ({:>2}%)",
+                "Read bytes: {} / {} total ({:>2.0}%)",
                 state.read_bytes,
                 state.total_bytes,
                 (state.read_bytes as f32 / state.total_bytes as f32 * 100.0)
             )),
             Text::from(format!("Read statements: {}", state.read_statements)),
             Text::from(format!(
-                "Prepared statements: {} / {} ({:>2}%)",
+                "Prepared statements: {} / {} ({:>2.0}%)",
                 state.prepared_statements,
                 state.read_statements,
                 (state.prepared_statements as f32 / state.read_statements as f32 * 100.0)
@@ -236,8 +242,7 @@ fn draw_prepare(frame: &mut Frame, area: Rect, state: &Prepare) {
         let text = Text::from(format!("Processing file {}", state.current_file.display()));
         frame.render_widget(text, text_area);
         let gauge = Gauge::default()
-            .style(Style::default().fg(Color::Black))
-            .gauge_style(Style::default().fg(Color::Green))
+            .gauge_style(Style::default().fg(Color::LightGreen))
             .ratio(state.current_read_bytes as f64 / state.current_file_size as f64);
         frame.render_widget(
             gauge,

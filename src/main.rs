@@ -116,13 +116,17 @@ pub async fn main() {
             });
 
             std::thread::scope(|s| {
+                let files: Vec<PathBuf> = files
+                    .iter()
+                    .map(PathBuf::from)
+                    .filter(|file| std::fs::exists(file).unwrap_or(false))
+                    .collect();
                 let queued_files: VecDeque<(PathBuf, usize)> = files
                     .iter()
+                    .cloned()
                     .map(|file| {
-                        (
-                            PathBuf::from(file),
-                            std::fs::metadata(file).unwrap().size() as usize,
-                        )
+                        let size = std::fs::metadata(&file).unwrap().size() as usize;
+                        (file, size)
                     })
                     .collect();
 
@@ -162,7 +166,7 @@ pub async fn main() {
                     }
                 });
 
-                s.spawn(|| ui::run_prepare(&mut terminal, ui_state, rx));
+                s.spawn(move || ui::run_prepare(&mut terminal, ui_state, rx));
 
                 let report = Some(asimov_dataset_cli::prepare::PrepareStatsReport { tx });
 
@@ -182,6 +186,8 @@ pub async fn main() {
             files,
             network,
         })) => {
+            let files: Vec<PathBuf> = files.iter().map(PathBuf::from).collect();
+
             let repository: AccountId = repository.parse().expect("invalid repository");
 
             let network_config = match network.as_str() {
