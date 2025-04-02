@@ -46,7 +46,7 @@ where
 
     let (dataset_tx, dataset_rx) = crossbeam::channel::bounded(10);
 
-    for _ in 0..4 {
+    for _ in 0..6 {
         let batch_rx = batch_rx.clone();
         let dataset_tx = dataset_tx.clone();
         set.spawn_blocking(|| prepare_worker_loop(batch_rx, dataset_tx));

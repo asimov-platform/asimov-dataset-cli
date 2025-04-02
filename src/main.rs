@@ -14,7 +14,7 @@ use asimov_dataset_cli::{
 use clientele::{
     StandardOptions,
     SysexitsError::*,
-    crates::clap::{CommandFactory, Parser, Subcommand},
+    crates::clap::{Args, CommandFactory, Parser, Subcommand},
     exit,
 };
 use near_api::AccountId;
@@ -50,7 +50,7 @@ enum Command {
 }
 
 /// Options for the prepare command
-#[derive(Debug, Parser)]
+#[derive(Debug, Args)]
 struct PrepareCommand {
     /// Files to prepare
     #[arg(required = true)]
@@ -58,7 +58,7 @@ struct PrepareCommand {
 }
 
 /// Options for the publish command
-#[derive(Debug, Parser)]
+#[derive(Debug, Args)]
 struct PublishCommand {
     /// Network on which to publish. Either `mainnet` or `testnet`
     #[arg(long)]
@@ -109,12 +109,11 @@ pub async fn main() {
         Some(Command::Prepare(cmd)) => cmd.run().await,
         Some(Command::Publish(cmd)) => cmd.run().await,
         None => todo!(),
-    }
-    .unwrap();
+    };
 }
 
 impl PrepareCommand {
-    async fn run(self) -> Result<(), Box<dyn std::error::Error>> {
+    async fn run(self) {
         let start = std::time::Instant::now();
 
         let (event_tx, event_rx) = crossbeam::channel::unbounded();
@@ -165,19 +164,18 @@ impl PrepareCommand {
 
         // let _ = set.join_all().await;
 
-        ratatui::try_restore().unwrap();
+        ratatui::restore();
 
         debug!(
             duration = ?std::time::Instant::now().duration_since(start),
             "Prepare finished"
         );
-
-        Ok(())
+        exit(EX_OK);
     }
 }
 
 impl PublishCommand {
-    async fn run(self) -> Result<(), Box<dyn std::error::Error>> {
+    async fn run(self) {
         let files: Vec<PathBuf> = self
             .files
             .iter()
@@ -299,8 +297,8 @@ impl PublishCommand {
 
         // let _ = set.join_all().await;
 
-        ratatui::try_restore().unwrap();
+        ratatui::restore();
 
-        Ok(())
+        exit(EX_OK);
     }
 }

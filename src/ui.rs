@@ -2,6 +2,7 @@
 
 use std::{
     collections::VecDeque,
+    fmt::Write,
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -17,6 +18,7 @@ use ratatui::{
     widgets::{Block, Borders, Gauge, List},
 };
 
+/// Prepare contains the UI state of preparation progress.
 #[derive(Debug, Default)]
 pub struct Prepare {
     pub current_file: Option<PathBuf>,
@@ -35,6 +37,7 @@ pub struct Prepare {
     pub prepared_statements: usize,
 }
 
+/// Publish contains the UI state of preparation progress.
 #[derive(Debug, Default)]
 pub struct Publish {
     pub prepare: Option<Prepare>,
@@ -119,7 +122,7 @@ pub fn run_prepare(
             Ok(event) => match event {
                 Event::Input(event) => {
                     if event.code == event::KeyCode::Char('q') {
-                        break Ok(());
+                        return Ok(());
                     }
                 }
                 Event::Tick => {}
@@ -189,7 +192,7 @@ pub fn run_publish(
             Ok(event) => match event {
                 Event::Input(event) => {
                     if event.code == event::KeyCode::Char('q') {
-                        break Ok(());
+                        return Ok(());
                     }
                 }
                 Event::Tick => {}
@@ -266,22 +269,34 @@ fn draw_prepare(frame: &mut Frame, area: Rect, state: &Prepare) {
 
     {
         let list = List::new([
-            Text::from(format!("Queued files: {}", state.queued_files.len())),
             Text::from(format!(
-                "Read bytes: {} / {} total ({:>2.0}%)",
-                state.read_bytes,
-                state.total_bytes,
+                "Queued files: {}",
+                format_number(state.queued_files.len())
+            )),
+            Text::from(format!(
+                "Read data: {} / {} total ({:>2.0}%)",
+                format_bytes(state.read_bytes),
+                format_bytes(state.total_bytes),
                 (state.read_bytes as f32 / state.total_bytes as f32 * 100.0)
             )),
-            Text::from(format!("Read statements: {}", state.read_statements)),
+            Text::from(format!(
+                "Read statements: {}",
+                format_number(state.read_statements)
+            )),
             Text::from(format!(
                 "Prepared statements: {} / {} ({:>2.0}%)",
-                state.prepared_statements,
-                state.read_statements,
+                format_number(state.prepared_statements),
+                format_number(state.read_statements),
                 (state.prepared_statements as f32 / state.read_statements as f32 * 100.0)
             )),
-            Text::from(format!("Prepared batches: {}", state.prepared_files.len())),
-            Text::from(format!("Size of batches: {} bytes", state.prepared_bytes)),
+            Text::from(format!(
+                "Prepared batches: {}",
+                format_number(state.prepared_files.len())
+            )),
+            Text::from(format!(
+                "Total size of batches: {}",
+                format_bytes(state.prepared_bytes)
+            )),
         ]);
 
         frame.render_widget(list, stats_area);
@@ -333,11 +348,14 @@ fn draw_publish(frame: &mut Frame, area: Rect, state: &Publish) {
         };
 
         let list = List::new([
-            Text::from(format!("Queued batches: {}", state.queued_files.len())),
             Text::from(format!(
-                "Published bytes: {} / {} total ({:>2.0}%)",
-                state.published_bytes,
-                state.total_bytes,
+                "Queued batches: {}",
+                format_number(state.queued_files.len())
+            )),
+            Text::from(format!(
+                "Publish data: {} / {} total ({:>2.0}%)",
+                format_bytes(state.published_bytes),
+                format_bytes(state.total_bytes),
                 if state.total_bytes > 0 {
                     state.published_bytes as f32 / state.total_bytes as f32 * 100.0
                 } else {
@@ -346,13 +364,13 @@ fn draw_publish(frame: &mut Frame, area: Rect, state: &Publish) {
             )),
             Text::from(format!(
                 "Published statements: {} / {} ({:>2.0}%)",
-                state.published_statements,
-                total_statements,
+                format_number(state.published_statements),
+                format_number(total_statements),
                 (state.published_statements as f32 / total_statements as f32 * 100.0)
             )),
             Text::from(format!(
                 "Published batches: {}",
-                state.published_files.len()
+                format_number(state.published_files.len())
             )),
         ]);
 
@@ -363,4 +381,58 @@ fn draw_publish(frame: &mut Frame, area: Rect, state: &Publish) {
         let text = Text::from(format!("Next batch: {}", batch.display()));
         frame.render_widget(text, current_batch_area);
     }
+}
+
+///
+/// ```
+/// # use asimov_dataset_cli::ui::format_bytes;
+/// assert_eq!("256 B", format_bytes(256).as_str());
+/// assert_eq!("999 B", format_bytes(999).as_str());
+/// assert_eq!("1.0 KB", format_bytes(1024).as_str());
+/// assert_eq!("4.1 KB", format_bytes(1<<12).as_str());
+/// assert_eq!("524.3 KB", format_bytes(1<<19).as_str());
+/// assert_eq!("2.1 MB", format_bytes((1<<21)+1).as_str());
+/// assert_eq!("2.1 MB", format_bytes((1<<21)+500).as_str());
+/// assert_eq!("1.1 GB", format_bytes((1<<30)).as_str());
+/// assert_eq!("1.0 GB", format_bytes(1000*1000*1000).as_str());
+/// assert_eq!("4.5 PB", format_bytes(1<<52).as_str());
+/// ```
+pub fn format_bytes(n: usize) -> String {
+    const KB: usize = 1_000;
+    const MB: usize = KB * 1000;
+    const GB: usize = MB * 1000;
+    const TB: usize = GB * 1000;
+    const PB: usize = TB * 1000;
+
+    match n {
+        ..KB => format!("{n} B"),
+        KB..MB => format!("{:.1} KB", (n as f64 / KB as f64)),
+        MB..GB => format!("{:.1} MB", (n as f64 / MB as f64)),
+        GB..TB => format!("{:.1} GB", (n as f64 / GB as f64)),
+        TB..PB => format!("{:.1} TB", (n as f64 / TB as f64)),
+        PB.. => format!("{:.1} PB", (n as f64 / PB as f64)),
+    }
+}
+
+/// ```
+/// # use asimov_dataset_cli::ui::format_number;
+/// assert_eq!("123", format_number(123).as_str());
+/// assert_eq!("1_234", format_number(1234).as_str());
+/// assert_eq!("123_456", format_number(123456).as_str());
+/// assert_eq!("1_234_567", format_number(1234567).as_str());
+/// ```
+pub fn format_number(n: usize) -> String {
+    let mut out = String::new();
+    let digits = n.to_string();
+    let len = digits.len();
+
+    for (i, c) in digits.chars().enumerate() {
+        out.push(c);
+        // Add underscore after every 3rd digit from the right, except at the end
+        if (len - i - 1) % 3 == 0 && i < len - 1 {
+            out.push('_');
+        }
+    }
+
+    out
 }
