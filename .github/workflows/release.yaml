@@ -33,10 +33,10 @@ jobs:
 #            artifact: linux-arm-musl
 #            target: aarch64-unknown-linux-musl
 #            use-zigbuild: true
-          - os: ubuntu-latest
+          - os: macos-latest
             artifact: macos-x86
             target: x86_64-apple-darwin
-          - os: ubuntu-latest
+          - os: macos-latest
             artifact: macos-arm
             target: aarch64-apple-darwin
 #          - os: ubuntu-latest
