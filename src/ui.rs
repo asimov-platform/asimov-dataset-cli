@@ -73,6 +73,7 @@ pub struct PublishProgress {
 }
 
 pub enum Event {
+    Exit,
     Resize,
     Tick,
     Input(event::KeyEvent),
@@ -120,6 +121,7 @@ pub fn run_prepare(
         match rx.recv() {
             Err(_) => return Ok(()),
             Ok(event) => match event {
+                Event::Exit => return Ok(()),
                 Event::Input(event) => {
                     if event.code == event::KeyCode::Char('q') {
                         return Ok(());
@@ -190,6 +192,7 @@ pub fn run_publish(
         match rx.recv() {
             Err(_) => return Ok(()),
             Ok(event) => match event {
+                Event::Exit => return Ok(()),
                 Event::Input(event) => {
                     if event.code == event::KeyCode::Char('q') {
                         return Ok(());

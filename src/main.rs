@@ -110,6 +110,8 @@ pub async fn main() {
         Some(Command::Publish(cmd)) => cmd.run().await,
         None => todo!(),
     };
+
+    exit(EX_OK);
 }
 
 impl PrepareCommand {
@@ -152,15 +154,18 @@ impl PrepareCommand {
             move || ui::listen_input(&tx)
         });
 
-        let report = Some(asimov_dataset_cli::prepare::PrepareStatsReport { tx: event_tx });
-
-        set.spawn(async move {
-            asimov_dataset_cli::prepare::prepare_datasets(files.into_iter(), None, report)
-                .await
-                .expect("`prepare` failed");
+        let report = Some(asimov_dataset_cli::prepare::PrepareStatsReport {
+            tx: event_tx.clone(),
         });
 
-        ui::run_prepare(&mut terminal, ui_state, event_rx).unwrap();
+        set.spawn_blocking(move || {
+            ui::run_prepare(&mut terminal, ui_state, event_rx).unwrap();
+        });
+
+        asimov_dataset_cli::prepare::prepare_datasets(files.into_iter(), None, report)
+            .await
+            .expect("`prepare` failed");
+        event_tx.send(ui::Event::Exit).ok();
 
         // let _ = set.join_all().await;
 
@@ -170,7 +175,6 @@ impl PrepareCommand {
             duration = ?std::time::Instant::now().duration_since(start),
             "Prepare finished"
         );
-        exit(EX_OK);
     }
 }
 
@@ -242,22 +246,6 @@ impl PublishCommand {
             drop(files_tx);
         }
 
-        set.spawn({
-            let tx = event_tx.clone();
-            let prepared_files = prepared_files.clone().into_iter();
-            async move {
-                asimov_dataset_cli::publish::publish_datasets(
-                    repository,
-                    signer,
-                    &network_config,
-                    prepared_files.chain(files_rx.iter()),
-                    Some(PublishStatsReport { tx }),
-                )
-                .await
-                .unwrap();
-            }
-        });
-
         let unprepared_files: VecDeque<(PathBuf, usize)> = unprepared_files
             .iter()
             .cloned()
@@ -287,18 +275,32 @@ impl PublishCommand {
         };
         let total_bytes = prepared_files.iter().fold(0, |acc, (_, size)| acc + size);
         let ui_state = ui::Publish {
-            queued_files: prepared_files,
+            queued_files: prepared_files.clone(),
             total_bytes,
             prepare: prepare_state,
             ..Default::default()
         };
 
-        ui::run_publish(&mut terminal, ui_state, event_rx).unwrap();
+        set.spawn_blocking(move || {
+            ui::run_publish(&mut terminal, ui_state, event_rx).unwrap();
+        });
+
+        asimov_dataset_cli::publish::publish_datasets(
+            repository,
+            signer,
+            &network_config,
+            prepared_files.into_iter().chain(files_rx.iter()),
+            Some(PublishStatsReport {
+                tx: event_tx.clone(),
+            }),
+        )
+        .await
+        .unwrap();
+
+        event_tx.send(ui::Event::Exit).ok();
 
         // let _ = set.join_all().await;
 
         ratatui::restore();
-
-        exit(EX_OK);
     }
 }

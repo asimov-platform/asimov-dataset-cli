@@ -51,6 +51,7 @@ where
         let dataset_tx = dataset_tx.clone();
         set.spawn_blocking(|| prepare_worker_loop(batch_rx, dataset_tx));
     }
+    drop(dataset_tx);
 
     set.spawn_blocking(|| write_worker_loop(dataset_rx, files_tx, report));
 
