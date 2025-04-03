@@ -53,6 +53,8 @@ where
                 |outcome| tracing::info!(?filename, status = ?outcome.transaction_outcome.outcome.status, "uploaded dataset"),
             )?;
 
+        std::fs::remove_file(&filename).ok();
+
         if let Some(ref report) = report {
             report
                 .tx
