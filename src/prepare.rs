@@ -283,10 +283,11 @@ fn write_worker_loop(
     // The index for output file. Used as `prepared.{:06d}.rdfb`.
     let mut file_idx: usize = 1;
     let mut total_written: usize = 0;
-    while let Ok(prepared) = producer.recv() {
-        let filename = format!("prepared.{:06}.rdfb", file_idx);
 
-        let filename = PathBuf::from(filename.clone());
+    let dir = std::env::temp_dir();
+
+    while let Ok(prepared) = producer.recv() {
+        let filename = dir.with_file_name(format!("prepared.{:06}.rdfb", file_idx));
 
         let mut file = std::fs::File::create(&filename).unwrap();
         file.write_all(&prepared.data).unwrap();
