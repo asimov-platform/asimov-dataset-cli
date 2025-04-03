@@ -2,7 +2,6 @@
 
 use std::{
     collections::VecDeque,
-    fmt::Write,
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -184,7 +183,6 @@ pub fn run_publish(
             if let Some(ref prepare) = state.prepare {
                 let [prepare_area, publish_area] =
                     Layout::vertical([Constraint::Fill(1), Constraint::Fill(1)])
-                        .margin(1)
                         .areas(frame.area());
 
                 draw_prepare(frame, prepare_area, prepare, verbose);
@@ -284,10 +282,9 @@ fn draw_prepare(frame: &mut Frame, area: Rect, state: &Prepare, verbose: bool) {
 
     let [title_area, stats_area, current_file_area] = Layout::vertical([
         Constraint::Length(1),
-        Constraint::Length(6),
+        Constraint::Length(7),
         Constraint::Length(1),
     ])
-    .margin(1)
     .spacing(1)
     .areas(area);
 
@@ -386,7 +383,6 @@ fn draw_publish(frame: &mut Frame, area: Rect, state: &Publish, verbose: bool) {
         Constraint::Length(4),
         Constraint::Length(1),
     ])
-    .margin(1)
     .spacing(1)
     .areas(area);
 
@@ -411,7 +407,7 @@ fn draw_publish(frame: &mut Frame, area: Rect, state: &Publish, verbose: bool) {
                 format_number(state.queued_files.len())
             )),
             Text::from(format!(
-                "Publish data: {} / {} total ({:>2.0}%)",
+                "Published data: {} / {} total ({:>2.0}%)",
                 format_bytes(state.published_bytes),
                 format_bytes(state.total_bytes),
                 if state.total_bytes > 0 {
@@ -436,7 +432,10 @@ fn draw_publish(frame: &mut Frame, area: Rect, state: &Publish, verbose: bool) {
     }
 
     if let Some((batch, _)) = state.queued_files.iter().next() {
-        let text = Text::from(format!("Next batch: {}", batch.display()));
+        let text = Text::from(format!(
+            "Next batch: {}",
+            batch.file_name().and_then(std::ffi::OsStr::to_str).unwrap()
+        ));
         frame.render_widget(text, current_batch_area);
     }
 }
