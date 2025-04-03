@@ -106,8 +106,8 @@ pub async fn main() {
     }
 
     match options.command {
-        Some(Command::Prepare(cmd)) => cmd.run().await,
-        Some(Command::Publish(cmd)) => cmd.run().await,
+        Some(Command::Prepare(cmd)) => cmd.run(options.flags.verbose > 0).await,
+        Some(Command::Publish(cmd)) => cmd.run(options.flags.verbose > 0).await,
         None => todo!(),
     };
 
@@ -115,14 +115,10 @@ pub async fn main() {
 }
 
 impl PrepareCommand {
-    async fn run(self) {
+    async fn run(self, verbose: bool) {
         let start = std::time::Instant::now();
 
         let (event_tx, event_rx) = crossbeam::channel::unbounded();
-
-        let mut terminal = ratatui::init_with_options(TerminalOptions {
-            viewport: ratatui::Viewport::Inline(30),
-        });
 
         let files: Vec<PathBuf> = self
             .files
@@ -158,8 +154,12 @@ impl PrepareCommand {
             tx: event_tx.clone(),
         });
 
+        let mut terminal = ratatui::init_with_options(TerminalOptions {
+            viewport: ratatui::Viewport::Inline(30),
+        });
+
         set.spawn_blocking(move || {
-            ui::run_prepare(&mut terminal, ui_state, event_rx).unwrap();
+            ui::run_prepare(&mut terminal, verbose, ui_state, event_rx).unwrap();
         });
 
         asimov_dataset_cli::prepare::prepare_datasets(files.into_iter(), None, report)
@@ -179,7 +179,7 @@ impl PrepareCommand {
 }
 
 impl PublishCommand {
-    async fn run(self) {
+    async fn run(self, verbose: bool) {
         let files: Vec<PathBuf> = self
             .files
             .iter()
@@ -261,7 +261,11 @@ impl PublishCommand {
         });
 
         let mut terminal = ratatui::init_with_options(TerminalOptions {
-            viewport: ratatui::Viewport::Inline(30),
+            viewport: if verbose {
+                ratatui::Viewport::Inline(30)
+            } else {
+                ratatui::Viewport::Inline(6)
+            },
         });
         let prepare_state = if unprepared_files.is_empty() {
             None
@@ -282,7 +286,7 @@ impl PublishCommand {
         };
 
         set.spawn_blocking(move || {
-            ui::run_publish(&mut terminal, ui_state, event_rx).unwrap();
+            ui::run_publish(&mut terminal, verbose, ui_state, event_rx).unwrap();
         });
 
         asimov_dataset_cli::publish::publish_datasets(

@@ -15,7 +15,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Style},
     text::{Line, Text},
-    widgets::{Block, Borders, Gauge, List},
+    widgets::{Block, Borders, Gauge, LineGauge, List},
 };
 
 /// Prepare contains the UI state of preparation progress.
@@ -112,11 +112,12 @@ pub fn listen_input(tx: &Sender<Event>) {
 
 pub fn run_prepare(
     terminal: &mut DefaultTerminal,
+    verbose: bool,
     mut state: Prepare,
     rx: Receiver<Event>,
 ) -> Result<()> {
     loop {
-        terminal.draw(|frame| draw_prepare(frame, frame.area(), &state))?;
+        terminal.draw(|frame| draw_prepare(frame, frame.area(), &state, verbose))?;
 
         match rx.recv() {
             Err(_) => return Ok(()),
@@ -171,6 +172,7 @@ pub fn run_prepare(
 
 pub fn run_publish(
     terminal: &mut DefaultTerminal,
+    verbose: bool,
     mut state: Publish,
     rx: Receiver<Event>,
 ) -> Result<()> {
@@ -179,13 +181,13 @@ pub fn run_publish(
             if let Some(ref prepare) = state.prepare {
                 let [prepare_area, publish_area] =
                     Layout::vertical([Constraint::Fill(1), Constraint::Fill(1)])
-                        .margin(2)
+                        .margin(1)
                         .areas(frame.area());
 
-                draw_prepare(frame, prepare_area, prepare);
-                draw_publish(frame, publish_area, &state);
+                draw_prepare(frame, prepare_area, prepare, verbose);
+                draw_publish(frame, publish_area, &state, verbose);
             } else {
-                draw_publish(frame, frame.area(), &state);
+                draw_publish(frame, frame.area(), &state, verbose);
             }
         })?;
 
@@ -252,7 +254,30 @@ pub fn run_publish(
     }
 }
 
-fn draw_prepare(frame: &mut Frame, area: Rect, state: &Prepare) {
+fn draw_prepare(frame: &mut Frame, area: Rect, state: &Prepare, verbose: bool) {
+    if !verbose {
+        let [_padding, area] =
+            Layout::horizontal([Constraint::Length(2), Constraint::Fill(1)]).areas(area);
+        let ratio = if state.total_bytes > 0 {
+            state.read_bytes as f64 / state.total_bytes as f64
+        } else {
+            0.0
+        };
+        let gauge = LineGauge::default()
+            .filled_style(Style::default().fg(Color::Blue))
+            .label(format!(
+                "Prepared {} / {} ({:>2.0}%) to {} batches ({})",
+                format_bytes(state.read_bytes),
+                format_bytes(state.total_bytes),
+                ratio * 100.0,
+                format_number(state.prepared_files.len()),
+                format_bytes(state.prepared_bytes),
+            ))
+            .ratio(ratio);
+        frame.render_widget(gauge, area);
+        return;
+    }
+
     let [title_area, stats_area, current_file_area] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(6),
@@ -325,7 +350,29 @@ fn draw_prepare(frame: &mut Frame, area: Rect, state: &Prepare) {
     }
 }
 
-fn draw_publish(frame: &mut Frame, area: Rect, state: &Publish) {
+fn draw_publish(frame: &mut Frame, area: Rect, state: &Publish, verbose: bool) {
+    if !verbose {
+        let [_padding, area] =
+            Layout::horizontal([Constraint::Length(2), Constraint::Fill(1)]).areas(area);
+        let ratio = if state.total_bytes > 0 {
+            state.published_bytes as f64 / state.total_bytes as f64
+        } else {
+            0.0
+        };
+        let gauge = LineGauge::default()
+            .filled_style(Style::default().fg(Color::Blue))
+            .label(format!(
+                "Published {} / {} ({:>2.0}%), {} batches",
+                format_bytes(state.published_bytes),
+                format_bytes(state.total_bytes),
+                ratio * 100.0,
+                format_number(state.published_files.len()),
+            ))
+            .ratio(ratio);
+        frame.render_widget(gauge, area);
+        return;
+    }
+
     let [title_area, stats_area, current_batch_area] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(4),
