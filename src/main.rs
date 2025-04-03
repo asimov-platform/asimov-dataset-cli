@@ -110,8 +110,6 @@ pub async fn main() {
         Some(Command::Publish(cmd)) => cmd.run(options.flags.verbose > 0).await,
         None => todo!(),
     };
-
-    exit(EX_OK);
 }
 
 impl PrepareCommand {
@@ -135,7 +133,7 @@ impl PrepareCommand {
             })
             .collect();
 
-        let total_bytes = queued_files.iter().fold(0, |acc, (_, size)| acc + size);
+        let total_bytes = queued_files.iter().map(|(_, size)| size).sum();
 
         let ui_state = ui::Prepare {
             total_bytes,
@@ -155,19 +153,32 @@ impl PrepareCommand {
         });
 
         let mut terminal = ratatui::init_with_options(TerminalOptions {
-            viewport: ratatui::Viewport::Inline(30),
+            viewport: if !verbose {
+                ratatui::Viewport::Inline(2)
+            } else {
+                ratatui::Viewport::Inline(15)
+            },
         });
 
+        let p = crossbeam::sync::Parker::new();
+
+        let u = p.unparker().clone();
         set.spawn_blocking(move || {
             ui::run_prepare(&mut terminal, verbose, ui_state, event_rx).unwrap();
+            u.unpark();
         });
 
-        asimov_dataset_cli::prepare::prepare_datasets(files.into_iter(), None, report)
-            .await
-            .expect("`prepare` failed");
-        event_tx.send(ui::Event::Exit).ok();
+        let u = p.unparker().clone();
+        set.spawn(async move {
+            asimov_dataset_cli::prepare::prepare_datasets(files.into_iter(), None, report)
+                .await
+                .expect("`prepare` failed");
+            u.unpark();
+        });
 
         // let _ = set.join_all().await;
+
+        p.park();
 
         ratatui::restore();
 
@@ -175,6 +186,8 @@ impl PrepareCommand {
             duration = ?std::time::Instant::now().duration_since(start),
             "Prepare finished"
         );
+
+        exit(EX_OK);
     }
 }
 
@@ -194,7 +207,7 @@ impl PublishCommand {
             "testnet" => near_api::NetworkConfig::testnet(),
             _ => {
                 print!("Unknown network name: {}", self.network);
-                exit(EX_OK);
+                exit(EX_CONFIG);
             }
         };
 
@@ -261,23 +274,23 @@ impl PublishCommand {
         });
 
         let mut terminal = ratatui::init_with_options(TerminalOptions {
-            viewport: if verbose {
-                ratatui::Viewport::Inline(30)
+            viewport: if !verbose {
+                ratatui::Viewport::Inline(4)
             } else {
-                ratatui::Viewport::Inline(6)
+                ratatui::Viewport::Inline(30)
             },
         });
         let prepare_state = if unprepared_files.is_empty() {
             None
         } else {
-            let total_bytes = unprepared_files.iter().fold(0, |acc, (_, size)| acc + size);
+            let total_bytes = unprepared_files.iter().map(|(_, size)| size).sum();
             Some(ui::Prepare {
                 total_bytes,
                 queued_files: unprepared_files,
                 ..Default::default()
             })
         };
-        let total_bytes = prepared_files.iter().fold(0, |acc, (_, size)| acc + size);
+        let total_bytes = prepared_files.iter().map(|(_, size)| size).sum();
         let ui_state = ui::Publish {
             queued_files: prepared_files.clone(),
             total_bytes,
@@ -285,26 +298,36 @@ impl PublishCommand {
             ..Default::default()
         };
 
+        let p = crossbeam::sync::Parker::new();
+
+        let u = p.unparker().clone();
         set.spawn_blocking(move || {
             ui::run_publish(&mut terminal, verbose, ui_state, event_rx).unwrap();
+            u.unpark();
         });
 
-        asimov_dataset_cli::publish::publish_datasets(
-            repository,
-            signer,
-            &network_config,
-            prepared_files.into_iter().chain(files_rx.iter()),
-            Some(PublishStatsReport {
-                tx: event_tx.clone(),
-            }),
-        )
-        .await
-        .unwrap();
+        let u = p.unparker().clone();
+        set.spawn(async move {
+            asimov_dataset_cli::publish::publish_datasets(
+                repository,
+                signer,
+                &network_config,
+                prepared_files.into_iter().chain(files_rx.iter()),
+                Some(PublishStatsReport {
+                    tx: event_tx.clone(),
+                }),
+            )
+            .await
+            .unwrap();
+            u.unpark();
+        });
 
-        event_tx.send(ui::Event::Exit).ok();
+        p.park();
 
         // let _ = set.join_all().await;
 
         ratatui::restore();
+
+        exit(EX_OK);
     }
 }

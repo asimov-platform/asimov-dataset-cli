@@ -35,6 +35,7 @@ pub struct Prepare {
     pub prepared_bytes: usize,
     pub prepared_files: Vec<PathBuf>,
     pub prepared_statements: usize,
+    pub skipped_statemets: usize,
 }
 
 /// Publish contains the UI state of preparation progress.
@@ -63,6 +64,7 @@ pub struct PrepareProgress {
     pub filename: PathBuf,
     pub bytes: usize,
     pub statement_count: usize,
+    pub skipped_statements: usize,
 }
 
 #[derive(Debug, Default)]
@@ -149,7 +151,7 @@ pub fn run_prepare(
                     }
 
                     state.read_bytes += progress.bytes;
-                    state.read_statements = progress.statement_count;
+                    state.read_statements += progress.statement_count;
 
                     if progress.finished {
                         state
@@ -162,6 +164,7 @@ pub fn run_prepare(
                 Event::Prepare(progress) => {
                     state.prepared_bytes += progress.bytes;
                     state.prepared_statements += progress.statement_count;
+                    state.skipped_statemets += progress.skipped_statements;
                     state.prepared_files.push(progress.filename);
                 }
                 Event::Publish(_) => unreachable!(),
@@ -223,7 +226,7 @@ pub fn run_publish(
                     }
 
                     prepare.read_bytes += progress.bytes;
-                    prepare.read_statements = progress.statement_count;
+                    prepare.read_statements += progress.statement_count;
 
                     if progress.finished {
                         prepare
@@ -237,6 +240,7 @@ pub fn run_publish(
                     let prepare = state.prepare.as_mut().unwrap();
                     prepare.prepared_bytes += progress.bytes;
                     prepare.prepared_statements += progress.statement_count;
+                    prepare.skipped_statemets += progress.skipped_statements;
                     prepare.prepared_files.push(progress.filename.clone());
                     state.total_bytes += progress.bytes;
                     state
@@ -316,6 +320,10 @@ fn draw_prepare(frame: &mut Frame, area: Rect, state: &Prepare, verbose: bool) {
                 format_number(state.prepared_statements),
                 format_number(state.read_statements),
                 (state.prepared_statements as f32 / state.read_statements as f32 * 100.0)
+            )),
+            Text::from(format!(
+                "Skipped statements: {}",
+                format_number(state.skipped_statemets),
             )),
             Text::from(format!(
                 "Prepared batches: {}",

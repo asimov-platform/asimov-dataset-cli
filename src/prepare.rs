@@ -69,6 +69,7 @@ struct StatementBatch {
 struct RDFBDataset {
     data: Vec<u8>,
     statement_count: usize,
+    skipped_statements: usize,
 }
 
 fn read_worker_loop(
@@ -136,7 +137,7 @@ fn read_worker_loop(
                     .send(crate::ui::Event::Reader(crate::ui::ReaderProgress {
                         filename: PathBuf::from(file),
                         bytes: *bytes,
-                        statement_count: statement_index,
+                        statement_count: quads.len(),
                         finished,
                     }))
                     .ok();
@@ -164,6 +165,8 @@ fn prepare_worker_loop(batch_rx: Receiver<StatementBatch>, dataset_tx: Sender<RD
     // It's used to quit early in the case where adding one more statement overflows but current
     // write_count doesn't meet ACCEPTABLE_RATIO.
     let mut best_ratio: f64 = 0.0;
+
+    let mut skipped_statements: usize = 0;
 
     loop {
         while have_more && (statement_buffer.len() < write_count) {
@@ -193,6 +196,7 @@ fn prepare_worker_loop(batch_rx: Receiver<StatementBatch>, dataset_tx: Sender<RD
             if write_count == 1 {
                 if let Some((index, _)) = statement_buffer.pop_front() {
                     tracing::warn!(?index, "statement is too large to be published even alone");
+                    skipped_statements += 1;
                     continue;
                 }
             }
@@ -257,6 +261,7 @@ fn prepare_worker_loop(batch_rx: Receiver<StatementBatch>, dataset_tx: Sender<RD
             .send(RDFBDataset {
                 data,
                 statement_count: try_write_count,
+                skipped_statements,
             })
             .unwrap();
 
@@ -266,6 +271,7 @@ fn prepare_worker_loop(batch_rx: Receiver<StatementBatch>, dataset_tx: Sender<RD
         write_count = 1;
         best_ratio = 0.0;
         lowest_overflow = usize::MAX;
+        skipped_statements = 0;
     }
 }
 
@@ -297,6 +303,7 @@ fn write_worker_loop(
                     filename,
                     bytes: prepared.data.len(),
                     statement_count: prepared.statement_count,
+                    skipped_statements: prepared.skipped_statements,
                 }))
                 .ok();
         }
