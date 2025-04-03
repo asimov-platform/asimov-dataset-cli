@@ -37,7 +37,7 @@ struct Options {
     help: bool,
 
     #[clap(subcommand)]
-    command: Option<Command>,
+    command: Command,
 }
 
 /// Commands for the ASIMOV CLI
@@ -106,9 +106,8 @@ pub async fn main() {
     }
 
     match options.command {
-        Some(Command::Prepare(cmd)) => cmd.run(options.flags.verbose > 0).await,
-        Some(Command::Publish(cmd)) => cmd.run(options.flags.verbose > 0).await,
-        None => todo!(),
+        Command::Prepare(cmd) => cmd.run(options.flags.verbose > 0).await,
+        Command::Publish(cmd) => cmd.run(options.flags.verbose > 0).await,
     };
 }
 
@@ -277,7 +276,7 @@ impl PublishCommand {
             viewport: if !verbose {
                 ratatui::Viewport::Inline(4)
             } else {
-                ratatui::Viewport::Inline(30)
+                ratatui::Viewport::Inline(20)
             },
         });
         let prepare_state = if unprepared_files.is_empty() {
