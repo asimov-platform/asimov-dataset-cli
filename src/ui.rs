@@ -37,7 +37,45 @@ pub struct Prepare {
     pub skipped_statemets: usize,
 }
 
-/// Publish contains the UI state of preparation progress.
+impl Prepare {
+    fn update_reader_state(&mut self, progress: ReaderProgress) {
+        match self.current_file {
+            Some(ref curr) if *curr == progress.filename => {
+                self.current_read_bytes += progress.bytes;
+            }
+            _ => {
+                let size = self
+                    .queued_files
+                    .iter()
+                    .find(|(name, _size)| *name == progress.filename)
+                    .unwrap()
+                    .1;
+                self.current_file = Some(progress.filename.clone());
+                self.current_file_size = size;
+                self.current_read_bytes = progress.bytes;
+            }
+        }
+
+        self.read_bytes += progress.bytes;
+        self.read_statements += progress.statement_count;
+
+        if progress.finished {
+            self.queued_files
+                .retain(|(name, _size)| *name != progress.filename);
+            self.read_files.push(progress.filename);
+            self.current_file = None;
+        }
+    }
+
+    fn update_prepare_state(&mut self, progress: PrepareProgress) {
+        self.prepared_bytes += progress.bytes;
+        self.prepared_statements += progress.statement_count;
+        self.skipped_statemets += progress.skipped_statements;
+        self.prepared_files.push(progress.filename);
+    }
+}
+
+/// Publish contains the UI state of publishing progress.
 #[derive(Debug, Default)]
 pub struct Publish {
     pub prepare: Option<Prepare>,
@@ -48,6 +86,15 @@ pub struct Publish {
     pub published_bytes: usize,
     pub published_files: Vec<PathBuf>,
     pub published_statements: usize,
+}
+
+impl Publish {
+    fn update_publish_state(&mut self, progress: PublishProgress) {
+        self.published_bytes += progress.bytes;
+        self.published_statements += progress.statement_count;
+        self.queued_files.retain(|(f, _)| *f != progress.filename);
+        self.published_files.push(progress.filename);
+    }
 }
 
 #[derive(Debug, Default)]
@@ -140,41 +187,8 @@ pub fn run_prepare(
         match progress_rx.recv() {
             Err(_) => return Ok(()), // no more updates, exit
             Ok(event) => match event {
-                Event::Reader(progress) => {
-                    match state.current_file {
-                        Some(ref curr) if *curr == progress.filename => {
-                            state.current_read_bytes += progress.bytes;
-                        }
-                        _ => {
-                            let size = state
-                                .queued_files
-                                .iter()
-                                .find(|(name, _size)| *name == progress.filename)
-                                .unwrap()
-                                .1;
-                            state.current_file = Some(progress.filename.clone());
-                            state.current_file_size = size;
-                            state.current_read_bytes = progress.bytes;
-                        }
-                    }
-
-                    state.read_bytes += progress.bytes;
-                    state.read_statements += progress.statement_count;
-
-                    if progress.finished {
-                        state
-                            .queued_files
-                            .retain(|(name, _size)| *name != progress.filename);
-                        state.read_files.push(progress.filename);
-                        state.current_file = None;
-                    }
-                }
-                Event::Prepare(progress) => {
-                    state.prepared_bytes += progress.bytes;
-                    state.prepared_statements += progress.statement_count;
-                    state.skipped_statemets += progress.skipped_statements;
-                    state.prepared_files.push(progress.filename);
-                }
+                Event::Reader(progress) => state.update_reader_state(progress),
+                Event::Prepare(progress) => state.update_prepare_state(progress),
                 Event::Publish(_) => unreachable!(),
             },
         }
@@ -219,54 +233,23 @@ pub fn run_publish(
         match progress_rx.recv() {
             Err(_) => return Ok(()),
             Ok(event) => match event {
-                Event::Reader(progress) => {
-                    let prepare = state.prepare.as_mut().unwrap();
-
-                    match prepare.current_file {
-                        Some(ref curr) if *curr == progress.filename => {
-                            prepare.current_read_bytes += progress.bytes;
-                        }
-                        _ => {
-                            let size = prepare
-                                .queued_files
-                                .iter()
-                                .find(|(name, _size)| *name == progress.filename)
-                                .unwrap()
-                                .1;
-                            prepare.current_file = Some(progress.filename.clone());
-                            prepare.current_file_size = size;
-                            prepare.current_read_bytes = progress.bytes;
-                        }
-                    }
-
-                    prepare.read_bytes += progress.bytes;
-                    prepare.read_statements += progress.statement_count;
-
-                    if progress.finished {
-                        prepare
-                            .queued_files
-                            .retain(|(name, _size)| *name != progress.filename);
-                        prepare.read_files.push(progress.filename);
-                        prepare.current_file = None;
-                    }
-                }
+                Event::Reader(progress) => state
+                    .prepare
+                    .as_mut()
+                    .unwrap()
+                    .update_reader_state(progress),
                 Event::Prepare(progress) => {
-                    let prepare = state.prepare.as_mut().unwrap();
-                    prepare.prepared_bytes += progress.bytes;
-                    prepare.prepared_statements += progress.statement_count;
-                    prepare.skipped_statemets += progress.skipped_statements;
-                    prepare.prepared_files.push(progress.filename.clone());
                     state.total_bytes += progress.bytes;
                     state
                         .queued_files
-                        .push_back((progress.filename, progress.statement_count));
+                        .push_back((progress.filename.clone(), progress.statement_count));
+                    state
+                        .prepare
+                        .as_mut()
+                        .unwrap()
+                        .update_prepare_state(progress);
                 }
-                Event::Publish(progress) => {
-                    state.published_bytes += progress.bytes;
-                    state.published_statements += progress.statement_count;
-                    state.queued_files.retain(|(f, _)| *f != progress.filename);
-                    state.published_files.push(progress.filename);
-                }
+                Event::Publish(progress) => state.update_publish_state(progress),
             },
         }
     }
