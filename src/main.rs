@@ -37,7 +37,7 @@ struct Options {
     help: bool,
 
     #[clap(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 /// Commands for the ASIMOV CLI
@@ -106,8 +106,9 @@ pub async fn main() {
     }
 
     match options.command {
-        Command::Prepare(cmd) => cmd.run(options.flags.verbose > 0).await,
-        Command::Publish(cmd) => cmd.run(options.flags.verbose > 0).await,
+        Some(Command::Prepare(cmd)) => cmd.run(options.flags.verbose > 0).await,
+        Some(Command::Publish(cmd)) => cmd.run(options.flags.verbose > 0).await,
+        None => {}
     };
 
     println!("\n");
