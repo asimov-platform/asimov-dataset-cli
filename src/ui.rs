@@ -7,7 +7,7 @@ use std::{
 };
 
 use color_eyre::Result;
-use crossbeam::channel::{Receiver, Sender};
+use crossbeam::channel::{Receiver, Sender, TryRecvError};
 use crossterm::event;
 use ratatui::{
     DefaultTerminal, Frame,
@@ -73,39 +73,41 @@ pub struct PublishProgress {
     pub statement_count: usize,
 }
 
-pub enum Event {
-    Exit,
+pub enum UIEvent {
+    Input(event::KeyEvent),
     Resize,
     Tick,
-    Input(event::KeyEvent),
+}
+
+pub enum Event {
     Reader(ReaderProgress),
     Prepare(PrepareProgress),
     Publish(PublishProgress),
 }
 
-pub fn listen_input(tx: &Sender<Event>) {
+pub fn listen_input(tx: &Sender<UIEvent>) {
     let tick_rate = Duration::from_millis(200);
     let mut last_tick = Instant::now();
     loop {
-        // poll for tick rate duration, if no events, sent tick event.
+        // poll for tick rate duration, if no events, send tick event.
         let timeout = tick_rate.saturating_sub(last_tick.elapsed());
         if event::poll(timeout).unwrap() {
             let Some(event) = event::read()
                 .map(|event| match event {
-                    event::Event::Key(key) => Some(Event::Input(key)),
-                    event::Event::Resize(_, _) => Some(Event::Resize),
+                    event::Event::Key(key) => Some(UIEvent::Input(key)),
+                    event::Event::Resize(_, _) => Some(UIEvent::Resize),
                     _ => None,
                 })
                 .unwrap()
             else {
-                continue;
+                break;
             };
             if tx.send(event).is_err() {
                 break;
             }
         }
         if last_tick.elapsed() >= tick_rate {
-            tx.send(Event::Tick).ok();
+            tx.send(UIEvent::Tick).ok();
             last_tick = Instant::now();
         }
     }
@@ -115,22 +117,29 @@ pub fn run_prepare(
     terminal: &mut DefaultTerminal,
     verbose: bool,
     mut state: Prepare,
-    rx: Receiver<Event>,
+    input_rx: Receiver<UIEvent>,
+    progress_rx: Receiver<Event>,
 ) -> Result<()> {
     loop {
         terminal.draw(|frame| draw_prepare(frame, frame.area(), &state, verbose))?;
 
-        match rx.recv() {
-            Err(_) => return Ok(()),
+        match input_rx.try_recv() {
             Ok(event) => match event {
-                Event::Exit => return Ok(()),
-                Event::Input(event) => {
+                UIEvent::Input(event) => {
                     if event.code == event::KeyCode::Char('q') {
                         return Ok(());
                     }
                 }
-                Event::Tick => {}
-                Event::Resize => terminal.autoresize()?,
+                UIEvent::Resize => terminal.autoresize()?,
+                UIEvent::Tick => {}
+            },
+            Err(TryRecvError::Empty) => {}
+            Err(err) => panic!("{err}"),
+        }
+
+        match progress_rx.recv() {
+            Err(_) => return Ok(()), // no more updates, exit
+            Ok(event) => match event {
                 Event::Reader(progress) => {
                     match state.current_file {
                         Some(ref curr) if *curr == progress.filename => {
@@ -176,7 +185,8 @@ pub fn run_publish(
     terminal: &mut DefaultTerminal,
     verbose: bool,
     mut state: Publish,
-    rx: Receiver<Event>,
+    input_rx: Receiver<UIEvent>,
+    progress_rx: Receiver<Event>,
 ) -> Result<()> {
     loop {
         terminal.draw(|frame| {
@@ -192,17 +202,23 @@ pub fn run_publish(
             }
         })?;
 
-        match rx.recv() {
-            Err(_) => return Ok(()),
+        match input_rx.try_recv() {
             Ok(event) => match event {
-                Event::Exit => return Ok(()),
-                Event::Input(event) => {
+                UIEvent::Input(event) => {
                     if event.code == event::KeyCode::Char('q') {
                         return Ok(());
                     }
                 }
-                Event::Tick => {}
-                Event::Resize => terminal.autoresize()?,
+                UIEvent::Resize => terminal.autoresize()?,
+                UIEvent::Tick => {}
+            },
+            Err(TryRecvError::Empty) => {}
+            Err(err) => panic!("{err}"),
+        }
+
+        match progress_rx.recv() {
+            Err(_) => return Ok(()),
+            Ok(event) => match event {
                 Event::Reader(progress) => {
                     let prepare = state.prepare.as_mut().unwrap();
 

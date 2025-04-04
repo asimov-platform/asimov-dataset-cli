@@ -109,12 +109,16 @@ pub async fn main() {
         Command::Prepare(cmd) => cmd.run(options.flags.verbose > 0).await,
         Command::Publish(cmd) => cmd.run(options.flags.verbose > 0).await,
     };
+
+    println!("\n");
+    exit(EX_OK);
 }
 
 impl PrepareCommand {
     async fn run(self, verbose: bool) {
         let start = std::time::Instant::now();
 
+        let (ui_event_tx, ui_event_rx) = crossbeam::channel::unbounded();
         let (event_tx, event_rx) = crossbeam::channel::unbounded();
 
         let files: Vec<PathBuf> = self
@@ -142,10 +146,7 @@ impl PrepareCommand {
 
         let mut set = JoinSet::new();
 
-        set.spawn_blocking({
-            let tx = event_tx.clone();
-            move || ui::listen_input(&tx)
-        });
+        set.spawn_blocking(move || ui::listen_input(&ui_event_tx));
 
         let report = Some(asimov_dataset_cli::prepare::PrepareStatsReport {
             tx: event_tx.clone(),
@@ -159,25 +160,17 @@ impl PrepareCommand {
             },
         });
 
-        let p = crossbeam::sync::Parker::new();
-
-        let u = p.unparker().clone();
-        set.spawn_blocking(move || {
-            ui::run_prepare(&mut terminal, verbose, ui_state, event_rx).unwrap();
-            u.unpark();
-        });
-
-        let u = p.unparker().clone();
         set.spawn(async move {
             asimov_dataset_cli::prepare::prepare_datasets(files.into_iter(), None, report)
                 .await
                 .expect("`prepare` failed");
-            u.unpark();
         });
 
-        // let _ = set.join_all().await;
+        drop(event_tx);
 
-        p.park();
+        ui::run_prepare(&mut terminal, verbose, ui_state, ui_event_rx, event_rx).unwrap();
+
+        // let _ = set.join_all().await;
 
         ratatui::restore();
 
@@ -185,8 +178,6 @@ impl PrepareCommand {
             duration = ?std::time::Instant::now().duration_since(start),
             "Prepare finished"
         );
-
-        exit(EX_OK);
     }
 }
 
@@ -223,6 +214,7 @@ impl PublishCommand {
         .expect("failed to get key in keystore");
         let signer = near_api::Signer::new(signer).unwrap();
 
+        let (ui_event_tx, ui_event_rx) = crossbeam::channel::unbounded();
         let (event_tx, event_rx) = crossbeam::channel::unbounded();
 
         let mut set = JoinSet::new();
@@ -248,7 +240,7 @@ impl PublishCommand {
                     asimov_dataset_cli::prepare::prepare_datasets(
                         unprepared_files,
                         Some(files_tx),
-                        Some(PrepareStatsReport { tx: tx.clone() }),
+                        Some(PrepareStatsReport { tx }),
                     )
                     .await
                     .unwrap();
@@ -267,10 +259,7 @@ impl PublishCommand {
             })
             .collect();
 
-        set.spawn_blocking({
-            let tx = event_tx.clone();
-            move || ui::listen_input(&tx)
-        });
+        set.spawn_blocking(move || ui::listen_input(&ui_event_tx));
 
         let mut terminal = ratatui::init_with_options(TerminalOptions {
             viewport: if !verbose {
@@ -297,36 +286,27 @@ impl PublishCommand {
             ..Default::default()
         };
 
-        let p = crossbeam::sync::Parker::new();
-
-        let u = p.unparker().clone();
-        set.spawn_blocking(move || {
-            ui::run_publish(&mut terminal, verbose, ui_state, event_rx).unwrap();
-            u.unpark();
+        set.spawn({
+            let tx = event_tx.clone();
+            async move {
+                asimov_dataset_cli::publish::publish_datasets(
+                    repository,
+                    signer,
+                    &network_config,
+                    prepared_files.into_iter().chain(files_rx.iter()),
+                    Some(PublishStatsReport { tx }),
+                )
+                .await
+                .unwrap();
+            }
         });
 
-        let u = p.unparker().clone();
-        set.spawn(async move {
-            asimov_dataset_cli::publish::publish_datasets(
-                repository,
-                signer,
-                &network_config,
-                prepared_files.into_iter().chain(files_rx.iter()),
-                Some(PublishStatsReport {
-                    tx: event_tx.clone(),
-                }),
-            )
-            .await
-            .unwrap();
-            u.unpark();
-        });
+        drop(event_tx);
 
-        p.park();
+        ui::run_publish(&mut terminal, verbose, ui_state, ui_event_rx, event_rx).unwrap();
 
         // let _ = set.join_all().await;
 
         ratatui::restore();
-
-        exit(EX_OK);
     }
 }
