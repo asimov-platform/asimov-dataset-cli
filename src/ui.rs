@@ -8,7 +8,7 @@ use std::{
 
 use color_eyre::Result;
 use crossbeam::channel::{Receiver, Sender, TryRecvError};
-use crossterm::event;
+use crossterm::event::{self, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout, Rect},
@@ -160,12 +160,13 @@ pub fn listen_input(tx: &Sender<UIEvent>) {
     }
 }
 
-pub fn run_prepare(
+pub fn run_prepare<T: FnOnce()>(
     terminal: &mut DefaultTerminal,
     verbose: bool,
     mut state: Prepare,
     input_rx: Receiver<UIEvent>,
     progress_rx: Receiver<Event>,
+    quit_callback: T,
 ) -> Result<()> {
     loop {
         terminal.draw(|frame| draw_prepare(frame, frame.area(), &state, verbose))?;
@@ -173,7 +174,11 @@ pub fn run_prepare(
         match input_rx.try_recv() {
             Ok(event) => match event {
                 UIEvent::Input(event) => {
-                    if event.code == event::KeyCode::Char('q') {
+                    if event.code == KeyCode::Char('q')
+                        || (event.code == KeyCode::Char('c')
+                            && event.modifiers == KeyModifiers::CONTROL)
+                    {
+                        quit_callback();
                         return Ok(());
                     }
                 }
@@ -195,12 +200,13 @@ pub fn run_prepare(
     }
 }
 
-pub fn run_publish(
+pub fn run_publish<T: FnOnce()>(
     terminal: &mut DefaultTerminal,
     verbose: bool,
     mut state: Publish,
     input_rx: Receiver<UIEvent>,
     progress_rx: Receiver<Event>,
+    quit_callback: T,
 ) -> Result<()> {
     loop {
         terminal.draw(|frame| {
@@ -219,7 +225,11 @@ pub fn run_publish(
         match input_rx.try_recv() {
             Ok(event) => match event {
                 UIEvent::Input(event) => {
-                    if event.code == event::KeyCode::Char('q') {
+                    if event.code == KeyCode::Char('q')
+                        || (event.code == KeyCode::Char('c')
+                            && event.modifiers == KeyModifiers::CONTROL)
+                    {
+                        quit_callback();
                         return Ok(());
                     }
                 }

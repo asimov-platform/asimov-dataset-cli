@@ -15,6 +15,8 @@ use std::{
 use tokio::task::JoinSet;
 use tracing::info;
 
+use crate::context::Context;
+
 /// Max bytes for serialized result, leaving some room for rdf_insert header.
 const MAX_FILE_SIZE: usize = 1_572_864 - 1024;
 
@@ -27,8 +29,9 @@ pub struct PrepareStatsReport {
 }
 
 pub async fn prepare_datasets<I>(
+    ctx: Context,
     files: I,
-    files_tx: Option<Sender<(PathBuf, usize)>>,
+    files_tx: Sender<(PathBuf, usize)>,
     report: Option<PrepareStatsReport>,
 ) -> Result<(), Box<dyn Error>>
 where
@@ -39,9 +42,10 @@ where
     let mut set = JoinSet::new();
 
     set.spawn_blocking({
+        let ctx = ctx.clone();
         let files: Vec<PathBuf> = files.collect();
         let report = report.clone();
-        move || read_worker_loop(&files, batch_tx, report)
+        move || read_worker_loop(ctx, &files, batch_tx, report)
     });
 
     let (dataset_tx, dataset_rx) = crossbeam::channel::bounded(10);
@@ -49,11 +53,12 @@ where
     for _ in 0..6 {
         let batch_rx = batch_rx.clone();
         let dataset_tx = dataset_tx.clone();
-        set.spawn_blocking(|| prepare_worker_loop(batch_rx, dataset_tx));
+        let ctx = ctx.clone();
+        set.spawn_blocking(|| prepare_worker_loop(ctx, batch_rx, dataset_tx));
     }
     drop(dataset_tx);
 
-    set.spawn_blocking(|| write_worker_loop(dataset_rx, files_tx, report));
+    set.spawn_blocking(|| write_worker_loop(ctx, dataset_rx, files_tx, report));
 
     while let Some(handle) = set.join_next().await {
         handle?;
@@ -73,6 +78,7 @@ struct RDFBDataset {
 }
 
 fn read_worker_loop(
+    ctx: Context,
     files: &[PathBuf],
     batch_tx: Sender<StatementBatch>,
     report: Option<PrepareStatsReport>,
@@ -111,7 +117,7 @@ fn read_worker_loop(
         let reader = CountingBufReader::new(reader, count.clone());
         let mut reader = oxrdfio::RdfParser::from_format(format).for_reader(reader);
 
-        loop {
+        while !ctx.is_cancelled() {
             let mut quads = Vec::with_capacity(batch_size);
 
             let finished = loop {
@@ -144,12 +150,18 @@ fn read_worker_loop(
                 *bytes = 0;
             }
 
-            batch_tx.send(StatementBatch { quads }).unwrap();
+            if batch_tx.send(StatementBatch { quads }).is_err() {
+                return;
+            }
         }
     }
 }
 
-fn prepare_worker_loop(batch_rx: Receiver<StatementBatch>, dataset_tx: Sender<RDFBDataset>) {
+fn prepare_worker_loop(
+    ctx: Context,
+    batch_rx: Receiver<StatementBatch>,
+    dataset_tx: Sender<RDFBDataset>,
+) {
     // Buffer for storing statements that need to be retried
     let mut statement_buffer: VecDeque<(usize, Box<dyn Statement>)> = VecDeque::new();
     // write_count is how many we're trying to serialize each iteration
@@ -168,7 +180,7 @@ fn prepare_worker_loop(batch_rx: Receiver<StatementBatch>, dataset_tx: Sender<RD
 
     let mut skipped_statements: usize = 0;
 
-    loop {
+    while !ctx.is_cancelled() {
         while have_more && (statement_buffer.len() < write_count) {
             let Ok(batch) = batch_rx.recv() else {
                 have_more = false;
@@ -257,13 +269,16 @@ fn prepare_worker_loop(batch_rx: Receiver<StatementBatch>, dataset_tx: Sender<RD
             }
         }
 
-        dataset_tx
+        if dataset_tx
             .send(RDFBDataset {
                 data,
                 statement_count: try_write_count,
                 skipped_statements,
             })
-            .unwrap();
+            .is_err()
+        {
+            return;
+        }
 
         statement_buffer.drain(..try_write_count);
 
@@ -276,8 +291,9 @@ fn prepare_worker_loop(batch_rx: Receiver<StatementBatch>, dataset_tx: Sender<RD
 }
 
 fn write_worker_loop(
-    producer: Receiver<RDFBDataset>,
-    files_tx: Option<Sender<(PathBuf, usize)>>,
+    ctx: Context,
+    dataset_rx: Receiver<RDFBDataset>,
+    files_tx: Sender<(PathBuf, usize)>,
     report: Option<PrepareStatsReport>,
 ) {
     // The index for output file. Used as `prepared.{:06d}.rdfb`.
@@ -286,14 +302,20 @@ fn write_worker_loop(
 
     let dir = std::env::temp_dir();
 
-    while let Ok(prepared) = producer.recv() {
+    while !ctx.is_cancelled() {
+        let Ok(prepared) = dataset_rx.recv() else {
+            break;
+        };
         let filename = dir.with_file_name(format!("prepared.{:06}.rdfb", file_idx));
 
         let mut file = std::fs::File::create(&filename).unwrap();
         file.write_all(&prepared.data).unwrap();
 
-        if let Some(ref tx) = files_tx {
-            tx.send((filename.clone(), prepared.statement_count)).ok();
+        if files_tx
+            .send((filename.clone(), prepared.statement_count))
+            .is_err()
+        {
+            return;
         }
 
         if let Some(ref report) = report {

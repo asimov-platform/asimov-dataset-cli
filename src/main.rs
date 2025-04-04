@@ -7,6 +7,7 @@ mod feature;
 use std::{collections::VecDeque, os::unix::fs::MetadataExt, path::PathBuf};
 
 use asimov_dataset_cli::{
+    context,
     prepare::PrepareStatsReport,
     publish::{self, PublishStatsReport},
     ui,
@@ -146,6 +147,8 @@ impl PrepareCommand {
 
         let mut set = JoinSet::new();
 
+        let (ctx, cancel) = context::new_cancel_context();
+
         set.spawn_blocking(move || ui::listen_input(&ui_event_tx));
 
         let report = Some(asimov_dataset_cli::prepare::PrepareStatsReport {
@@ -160,15 +163,35 @@ impl PrepareCommand {
             },
         });
 
-        set.spawn(async move {
-            asimov_dataset_cli::prepare::prepare_datasets(files.into_iter(), None, report)
+        let (files_tx, files_rx) = crossbeam::channel::unbounded();
+
+        set.spawn({
+            let ctx = ctx.clone();
+            async move {
+                asimov_dataset_cli::prepare::prepare_datasets(
+                    ctx,
+                    files.into_iter(),
+                    files_tx,
+                    report,
+                )
                 .await
                 .expect("`prepare` failed");
+            }
         });
 
         drop(event_tx);
 
-        ui::run_prepare(&mut terminal, verbose, ui_state, ui_event_rx, event_rx).unwrap();
+        ui::run_prepare(
+            &mut terminal,
+            verbose,
+            ui_state,
+            ui_event_rx,
+            event_rx,
+            || cancel.cancel(),
+        )
+        .unwrap();
+
+        drop(files_rx);
 
         let _ = set.join_all().await;
 
@@ -216,6 +239,8 @@ impl PublishCommand {
 
         let mut set = JoinSet::new();
 
+        let (ctx, cancel) = context::new_cancel_context();
+
         let (prepared_files, unprepared_files) = publish::split_prepared_files(&files);
 
         let prepared_files: VecDeque<(PathBuf, usize)> = prepared_files
@@ -232,13 +257,16 @@ impl PublishCommand {
 
         if !unprepared_files.is_empty() {
             set.spawn({
+                let ctx = ctx.clone();
                 let tx = event_tx.clone();
                 let unprepared_files = unprepared_files.clone().into_iter();
+                let report = Some(PrepareStatsReport { tx });
                 async move {
                     asimov_dataset_cli::prepare::prepare_datasets(
+                        ctx,
                         unprepared_files,
-                        Some(files_tx),
-                        Some(PrepareStatsReport { tx }),
+                        files_tx,
+                        report,
                     )
                     .await
                     .unwrap();
@@ -290,6 +318,7 @@ impl PublishCommand {
             let tx = event_tx.clone();
             async move {
                 asimov_dataset_cli::publish::publish_datasets(
+                    ctx,
                     repository,
                     signer,
                     &network_config,
@@ -303,7 +332,15 @@ impl PublishCommand {
 
         drop(event_tx);
 
-        ui::run_publish(&mut terminal, verbose, ui_state, ui_event_rx, event_rx).unwrap();
+        ui::run_publish(
+            &mut terminal,
+            verbose,
+            ui_state,
+            ui_event_rx,
+            event_rx,
+            || cancel.cancel(),
+        )
+        .unwrap();
 
         let _ = set.join_all().await;
 

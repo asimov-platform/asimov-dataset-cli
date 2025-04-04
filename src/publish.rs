@@ -8,6 +8,8 @@ use near_api::{
 };
 use std::{error::Error, io::Read, path::PathBuf, sync::Arc};
 
+use crate::context::Context;
+
 #[derive(Clone, Debug)]
 pub struct PublishStatsReport {
     pub tx: Sender<crate::ui::Event>,
@@ -22,6 +24,7 @@ pub fn split_prepared_files(files: &[PathBuf]) -> (Vec<PathBuf>, Vec<PathBuf>) {
 }
 
 pub async fn publish_datasets<I>(
+    ctx: Context,
     repository: AccountId,
     signer: Arc<near_api::Signer>,
     network: &NetworkConfig,
@@ -32,6 +35,9 @@ where
     I: Iterator<Item = (PathBuf, usize)>,
 {
     for (filename, statement_count) in files {
+        if ctx.is_cancelled() {
+            break;
+        }
         let mut args = Vec::new();
         1_u8.serialize(&mut args)?; // version 1
         "".serialize(&mut args)?;
