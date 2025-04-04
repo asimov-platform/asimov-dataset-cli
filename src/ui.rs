@@ -133,28 +133,28 @@ pub enum Event {
 }
 
 pub fn listen_input(tx: &Sender<UIEvent>) {
-    let tick_rate = Duration::from_millis(200);
+    let tick_rate = Duration::from_millis(100);
     let mut last_tick = Instant::now();
     loop {
         // poll for tick rate duration, if no events, send tick event.
         let timeout = tick_rate.saturating_sub(last_tick.elapsed());
         if event::poll(timeout).unwrap() {
-            let Some(event) = event::read()
-                .map(|event| match event {
-                    event::Event::Key(key) => Some(UIEvent::Input(key)),
-                    event::Event::Resize(_, _) => Some(UIEvent::Resize),
-                    _ => None,
-                })
-                .unwrap()
-            else {
-                break;
+            let event = match event::read() {
+                Ok(event) => match event {
+                    event::Event::Key(key) => UIEvent::Input(key),
+                    event::Event::Resize(_, _) => UIEvent::Resize,
+                    _ => continue,
+                },
+                Err(_) => break,
             };
             if tx.send(event).is_err() {
                 break;
             }
         }
         if last_tick.elapsed() >= tick_rate {
-            tx.send(UIEvent::Tick).ok();
+            if tx.send(UIEvent::Tick).is_err() {
+                break;
+            }
             last_tick = Instant::now();
         }
     }

@@ -112,7 +112,6 @@ pub async fn main() {
     };
 
     println!("\n");
-    exit(EX_OK);
 }
 
 impl PrepareCommand {
@@ -171,7 +170,7 @@ impl PrepareCommand {
 
         ui::run_prepare(&mut terminal, verbose, ui_state, ui_event_rx, event_rx).unwrap();
 
-        // let _ = set.join_all().await;
+        let _ = set.join_all().await;
 
         ratatui::restore();
 
@@ -215,9 +214,6 @@ impl PublishCommand {
         .expect("failed to get key in keystore");
         let signer = near_api::Signer::new(signer).unwrap();
 
-        let (ui_event_tx, ui_event_rx) = crossbeam::channel::unbounded();
-        let (event_tx, event_rx) = crossbeam::channel::unbounded();
-
         let mut set = JoinSet::new();
 
         let (prepared_files, unprepared_files) = publish::split_prepared_files(&files);
@@ -231,6 +227,7 @@ impl PublishCommand {
             })
             .collect();
 
+        let (event_tx, event_rx) = crossbeam::channel::unbounded();
         let (files_tx, files_rx) = crossbeam::channel::unbounded();
 
         if !unprepared_files.is_empty() {
@@ -259,6 +256,8 @@ impl PublishCommand {
                 (file, size)
             })
             .collect();
+
+        let (ui_event_tx, ui_event_rx) = crossbeam::channel::unbounded();
 
         set.spawn_blocking(move || ui::listen_input(&ui_event_tx));
 
@@ -306,7 +305,7 @@ impl PublishCommand {
 
         ui::run_publish(&mut terminal, verbose, ui_state, ui_event_rx, event_rx).unwrap();
 
-        // let _ = set.join_all().await;
+        let _ = set.join_all().await;
 
         ratatui::restore();
     }
