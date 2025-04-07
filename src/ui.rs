@@ -8,7 +8,7 @@ use std::{
 
 use color_eyre::Result;
 use crossbeam::channel::{Receiver, Sender, TryRecvError};
-use crossterm::event::{self, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{self, KeyCode, KeyModifiers};
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout, Rect},

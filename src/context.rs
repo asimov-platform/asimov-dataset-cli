@@ -1,3 +1,5 @@
+// This is free and unencumbered software released into the public domain.
+
 use std::sync::Arc;
 
 use crossbeam::atomic::AtomicCell;
