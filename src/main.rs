@@ -224,21 +224,27 @@ impl PublishCommand {
                     Some("near") => near_api::NetworkConfig::mainnet(),
                     Some("testnet") => near_api::NetworkConfig::testnet(),
                     _ => {
-                        eprint!("Unable to infer network, please provide --network");
+                        eprintln!("Unable to infer network, please provide --network");
                         exit(EX_CONFIG);
                     }
                 }
             }
             Some(network) => {
-                eprint!("Unknown network name: {}", network);
+                eprintln!("Unknown network name: {}", network);
                 exit(EX_CONFIG);
             }
         };
 
-        let near_signer: AccountId = std::env::var("NEAR_SIGNER")
-            .expect("need NEAR_SIGNER")
-            .parse()
-            .expect("invalid account name in NEAR_SIGNER");
+        let near_signer = match std::env::var("NEAR_SIGNER") {
+            Ok(signer) => signer
+                .parse()
+                .expect("invalid account address in NEAR_SIGNER"),
+            Err(std::env::VarError::NotPresent) => repository.clone(),
+            Err(err) => {
+                eprintln!("{err}");
+                exit(EX_CONFIG);
+            }
+        };
 
         let signer = near_api::signer::keystore::KeystoreSigner::search_for_keys(
             near_signer,
