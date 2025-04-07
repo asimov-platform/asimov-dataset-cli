@@ -63,7 +63,7 @@ struct PrepareCommand {
 struct PublishCommand {
     /// Network on which to publish. Either `mainnet` or `testnet`
     #[arg(long)]
-    network: String,
+    network: Option<String>,
 
     /// Repository where to publish the dataset files
     #[arg(required = true)]
@@ -215,11 +215,22 @@ impl PublishCommand {
 
         let repository: AccountId = self.repository.parse().expect("invalid repository");
 
-        let network_config = match self.network.as_str() {
-            "mainnet" => near_api::NetworkConfig::mainnet(),
-            "testnet" => near_api::NetworkConfig::testnet(),
-            _ => {
-                print!("Unknown network name: {}", self.network);
+        let network_config = match self.network.as_deref() {
+            Some("mainnet") => near_api::NetworkConfig::mainnet(),
+            Some("testnet") => near_api::NetworkConfig::testnet(),
+            None => {
+                // infer from repository accountid
+                match repository.as_str().split('.').next_back() {
+                    Some("near") => near_api::NetworkConfig::mainnet(),
+                    Some("testnet") => near_api::NetworkConfig::testnet(),
+                    _ => {
+                        eprint!("Unable to infer network, please provide --network");
+                        exit(EX_CONFIG);
+                    }
+                }
+            }
+            Some(network) => {
+                eprint!("Unknown network name: {}", network);
                 exit(EX_CONFIG);
             }
         };
