@@ -65,9 +65,14 @@ struct PublishCommand {
     #[arg(long)]
     network: Option<String>,
 
+    /// Account that signs batches sent to the repository.
+    #[arg(long)]
+    signer: Option<String>,
+
     /// Repository where to publish the dataset files
     #[arg(required = true)]
     repository: String,
+
     /// Files to publish
     #[arg(required = true)]
     files: Vec<String>,
@@ -235,14 +240,20 @@ impl PublishCommand {
             }
         };
 
-        let near_signer = match std::env::var("NEAR_SIGNER") {
-            Ok(signer) => signer
-                .parse()
-                .expect("invalid account address in NEAR_SIGNER"),
-            Err(std::env::VarError::NotPresent) => repository.clone(),
-            Err(err) => {
-                eprintln!("{err}");
-                exit(EX_CONFIG);
+        let near_signer = {
+            if let Some(signer) = self.signer {
+                signer.parse().expect("invalid account address in --signer")
+            } else {
+                match std::env::var("NEAR_SIGNER") {
+                    Ok(signer) => signer
+                        .parse()
+                        .expect("invalid account address in NEAR_SIGNER"),
+                    Err(std::env::VarError::NotPresent) => repository.clone(),
+                    Err(err) => {
+                        eprintln!("{err}");
+                        exit(EX_CONFIG);
+                    }
+                }
             }
         };
 
