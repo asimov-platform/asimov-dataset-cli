@@ -21,7 +21,7 @@
 #### Installation via Cargo
 
 ```bash
-cargo install asimov-dataset-cli
+cargo install asimov-dataset-cli@25.0.0-dev.1
 ```
 
 ### Installation using Package Manager
@@ -43,7 +43,10 @@ scoop install asimov-platform/asimov-dataset-cli
 
 ## 👉 Examples
 
-TBD
+```bash
+# publish RDF data in data1.ttl and data2.nt to an on-chain repository at your-repo.testnet
+asimov-dataset publish --network testnet your-repo.testnet ./data1.ttl ./data2.nt
+```
 
 ## 📚 Reference
 

@@ -15,7 +15,7 @@ use asimov_dataset_cli::{
 use clientele::{
     StandardOptions,
     SysexitsError::*,
-    crates::clap::{Args, CommandFactory, Parser, Subcommand},
+    crates::clap::{Parser, Subcommand},
     exit,
 };
 use near_api::AccountId;
@@ -25,47 +25,69 @@ use tracing::debug;
 
 /// ASIMOV Dataset Command-Line Interface (CLI)
 #[derive(Debug, Parser)]
-#[command(name = "asimov-dataset", long_about)]
-#[command(allow_external_subcommands = true)]
-#[command(arg_required_else_help = true)]
-#[command(disable_help_flag = true)]
-#[command(disable_help_subcommand = true)]
+#[command(name = "asimov-dataset", about, long_about)]
 struct Options {
     #[clap(flatten)]
     flags: StandardOptions,
 
-    #[clap(short = 'h', long, help = "Print help (see more with '--help')")]
-    help: bool,
-
     #[clap(subcommand)]
-    command: Option<Command>,
+    command: Command,
 }
+
+const PUBLISH_USAGE: &str = "asimov-dataset publish [OPTIONS] <REPOSITORY> <FILES>...\n       \
+                             asimov-dataset publish your-repo.near ./data.ttl\n       \
+                             asimov-dataset publish --network testnet your-repo.testnet ./data1.ttl ./data2.nt\n       \
+                             asimov-dataset publish --signer other.testnet your-repo.testnet ./data.rdfb\n       \
+                             asimov-dataset publish your-repo.near ./prepared/*.rdfb ./raw/*.ttl";
+
+const PREPARE_USAGE: &str = "asimov-dataset prepare [OPTIONS] <FILES>...\n       \
+                             asimov-dataset prepare data.ttl\n       \
+                             asimov-dataset prepare ./data1.ttl ./data2.nt ./data3.n3\n       \
+                             asimov-dataset prepare ./dataset/*.ttl";
 
 /// Commands for the ASIMOV CLI
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Prepare dataset files
-    Prepare(PrepareCommand),
-    /// Publish dataset files
+    /// Publish dataset files to an on-chain repository contract.
+    ///
+    /// This command can publish both raw RDF data files and pre-prepared RDFB files.
+    /// Raw RDF files will be automatically prepared before publishing.
+    #[command(override_usage = PUBLISH_USAGE)]
     Publish(PublishCommand),
+
+    /// Prepare dataset files without publishing.
+    ///
+    /// This command processes RDF data files and converts them into a format
+    /// ready for publishing to the ASIMOV network.
+    #[command(override_usage = PREPARE_USAGE)]
+    Prepare(PrepareCommand),
 }
 
 /// Options for the prepare command
-#[derive(Debug, Args)]
+#[derive(Debug, Parser)]
 struct PrepareCommand {
-    /// Files to prepare
+    /// Files to prepare. Supported formats: n3, nt, nq, rdf, ttl, trig.
+    ///
+    /// Each file should contain valid RDF data in one of the supported formats.
+    /// The format is determined by the file extension.
     #[arg(required = true)]
     files: Vec<String>,
 }
 
 /// Options for the publish command
-#[derive(Debug, Args)]
+#[derive(Debug, Parser)]
 struct PublishCommand {
-    /// Network on which to publish. Either `mainnet` or `testnet`
+    /// Network on which to publish. Either `mainnet` or `testnet`.
+    ///
+    /// If not provided, the network will be inferred from the repository name
+    /// (`.near` suffix for mainnet, `.testnet` suffix for testnet).
     #[arg(long)]
     network: Option<String>,
 
     /// Account that signs batches sent to the repository.
+    ///
+    /// By default, the repository account is used for signing.
+    /// Can also be set via the NEAR_SIGNER environment variable.
     #[arg(long)]
     signer: Option<String>,
 
@@ -78,6 +100,12 @@ struct PublishCommand {
     repository: String,
 
     /// Files to publish.
+    ///
+    /// Supports both:
+    ///
+    /// - Raw RDF files (formats: n3, nt, nq, rdf, ttl, trig) which will be prepared automatically
+    ///
+    /// - Pre-prepared RDFB files from previous 'prepare' command runs
     #[arg(required = true)]
     files: Vec<String>,
 }
@@ -109,16 +137,9 @@ pub async fn main() {
         exit(EX_OK);
     }
 
-    // Print help, if requested:
-    if options.help {
-        Options::command().print_long_help().unwrap();
-        exit(EX_OK);
-    }
-
     match options.command {
-        Some(Command::Prepare(cmd)) => cmd.run(options.flags.verbose > 0).await,
-        Some(Command::Publish(cmd)) => cmd.run(options.flags.verbose > 0).await,
-        None => {}
+        Command::Prepare(cmd) => cmd.run(options.flags.verbose > 0).await,
+        Command::Publish(cmd) => cmd.run(options.flags.verbose > 0).await,
     };
 
     println!("\n");
