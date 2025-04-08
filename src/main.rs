@@ -69,11 +69,15 @@ struct PublishCommand {
     #[arg(long)]
     signer: Option<String>,
 
-    /// Repository where to publish the dataset files
+    /// Optional dataset name in the repository.
+    #[arg(long)]
+    dataset: Option<String>,
+
+    /// Repository is the on-chain account address to which the data is published.
     #[arg(required = true)]
     repository: String,
 
-    /// Files to publish
+    /// Files to publish.
     #[arg(required = true)]
     files: Vec<String>,
 }
@@ -348,6 +352,7 @@ impl PublishCommand {
                 asimov_dataset_cli::publish::publish_datasets(
                     ctx,
                     repository,
+                    self.dataset,
                     signer,
                     &network_config,
                     prepared_files.into_iter().chain(files_rx.iter()),

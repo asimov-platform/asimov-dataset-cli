@@ -26,6 +26,7 @@ pub fn split_prepared_files(files: &[PathBuf]) -> (Vec<PathBuf>, Vec<PathBuf>) {
 pub async fn publish_datasets<I>(
     ctx: Context,
     repository: AccountId,
+    dataset: Option<String>,
     signer: Arc<near_api::Signer>,
     network: &NetworkConfig,
     files: I,
@@ -34,13 +35,14 @@ pub async fn publish_datasets<I>(
 where
     I: Iterator<Item = (PathBuf, usize)>,
 {
+    let dataset = dataset.unwrap_or(String::from(""));
     for (filename, statement_count) in files {
         if ctx.is_cancelled() {
             break;
         }
         let mut args = Vec::new();
         1_u8.serialize(&mut args)?; // version 1
-        "".serialize(&mut args)?;
+        dataset.serialize(&mut args)?;
         1_u8.serialize(&mut args)?; // RDF/Borsh dataset encoding
 
         let bytes = std::fs::File::open(&filename)?.read_to_end(&mut args)?;
