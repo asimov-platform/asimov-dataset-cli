@@ -54,8 +54,6 @@ jobs:
           sudo apt-get install --assume-yes libudev-dev
       - name: Build
         uses: asimov-platform/build-rust-action@v2
-        env:
-          OPENSSL_NO_VENDOR: 1
         with:
           target: ${{ matrix.target }}
           artifact-name: ${{ matrix.artifact }}
