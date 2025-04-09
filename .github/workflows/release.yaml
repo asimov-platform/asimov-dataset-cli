@@ -1,14 +1,12 @@
-# See: https://docs.github.com/en/actions/writing-workflows
----
 name: Release
 
-# Trigger on any tag creation:
 on:
   push:
   workflow_dispatch:
-#  push:
-#    tags:
-#      - "*"
+  # Uncomment below if you only want to trigger on tagged pushes
+  # push:
+  #   tags:
+  #     - "*"
 
 jobs:
   build:
@@ -16,63 +14,58 @@ jobs:
       fail-fast: true
       matrix:
         include:
-#          - os: ubuntu-latest
-#            artifact: linux-x86-gnu
-#            target: x86_64-unknown-linux-gnu
-#            glibc-version: 2.28
           - os: ubuntu-latest
             artifact: linux-arm-gnu
             target: aarch64-unknown-linux-gnu
-#            glibc-version: 2.28
-#            use-zigbuild: true
-#          - os: ubuntu-latest
-#            artifact: linux-x86-musl
-#            target: x86_64-unknown-linux-musl
-#            use-zigbuild: true
-#          - os: ubuntu-latest
-#            artifact: linux-arm-musl
-#            target: aarch64-unknown-linux-musl
-#            use-zigbuild: true
-#          - os: macos-latest
-#            artifact: macos-x86
-#            target: x86_64-apple-darwin
-#          - os: macos-latest
-#            artifact: macos-arm
-#            target: aarch64-apple-darwin
-#          - os: windows-latest
-#            artifact: windows-x64
-#            target: x86_64-pc-windows-gnu
-#            extension: exe
+            # extension: if you need e.g. .exe for Windows, you can set it here
     name: Build ${{ matrix.artifact }}
     runs-on: ${{ matrix.os }}
     continue-on-error: false
     steps:
+      - name: Install cross compiler
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
+            pkg-config-aarch64-linux-gnu
+
       - name: Install system dependencies
         if: startsWith(matrix.os, 'ubuntu')
         run: |
-          sudo apt-get update && \
-          sudo apt-get install --assume-yes libudev-dev
+          sudo apt-get update
+          sudo apt-get install --yes libudev-dev
+
+      - name: Check out repository
+        uses: actions/checkout@v3
+
       - name: Build
         uses: asimov-platform/build-rust-action@v2
+        # If you *require* dynamic linking against a system OpenSSL,
+        # be sure it exists for aarch64, or also set up cross pkg-config.
+        # If you want to allow bundled OpenSSL, remove or set OPENSSL_NO_VENDOR=0:
+        # env:
+        #   OPENSSL_NO_VENDOR: 0
         with:
           target: ${{ matrix.target }}
           artifact-name: ${{ matrix.artifact }}
           artifact-prefix: asimov
           binary-name: asimov-dataset-cli
-          binary-extension: ${{ matrix.extension }}
-          strip-artifact: ${{ matrix.strip || 'false' }}
-          use-zigbuild: ${{ matrix.use-zigbuild || 'false' }}
+          strip-artifact: false
+          use-zigbuild: false
           rust-toolchain: stable
 
   release:
     name: Release
     runs-on: ubuntu-latest
+    # Only run this job when a tag is pushed:
     if: startsWith(github.ref, 'refs/tags/')
     needs: build
     permissions:
       contents: write
     steps:
-      - name: Release
+      - name: Create Release
         uses: asimov-platform/release-action@v2
         with:
           token: ${{ secrets.PAT_RELEASE }}
