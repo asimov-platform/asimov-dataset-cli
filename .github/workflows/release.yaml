@@ -55,8 +55,8 @@ jobs:
 
       - name: Build
         uses: asimov-platform/build-rust-action@v2
-        env:
-          OPENSSL_NO_VENDOR: 1
+#        env:
+#          OPENSSL_NO_VENDOR: 1
         with:
           target: ${{ matrix.target }}
           artifact-name: ${{ matrix.artifact }}
