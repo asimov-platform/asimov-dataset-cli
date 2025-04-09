@@ -28,12 +28,31 @@ pub struct PrepareStatsReport {
     pub tx: Sender<crate::ui::Event>,
 }
 
-pub async fn prepare_datasets<I>(
-    ctx: Context,
+#[derive(Debug)]
+pub struct Params<I> {
     files: I,
     files_tx: Sender<(PathBuf, usize)>,
     report: Option<PrepareStatsReport>,
-) -> Result<(), Box<dyn Error>>
+    output_dir: PathBuf,
+}
+
+impl<I> Params<I> {
+    pub fn new(
+        files: I,
+        files_tx: Sender<(PathBuf, usize)>,
+        report: Option<PrepareStatsReport>,
+        output_dir: PathBuf,
+    ) -> Self {
+        Self {
+            files,
+            files_tx,
+            report,
+            output_dir,
+        }
+    }
+}
+
+pub async fn prepare_datasets<I>(ctx: Context, params: Params<I>) -> Result<(), Box<dyn Error>>
 where
     I: Iterator<Item = PathBuf>,
 {
@@ -43,8 +62,8 @@ where
 
     set.spawn_blocking({
         let ctx = ctx.clone();
-        let files: Vec<PathBuf> = files.collect();
-        let report = report.clone();
+        let files: Vec<PathBuf> = params.files.collect();
+        let report = params.report.clone();
         move || read_worker_loop(ctx, &files, batch_tx, report)
     });
 
@@ -58,7 +77,15 @@ where
     }
     drop(dataset_tx);
 
-    set.spawn_blocking(|| write_worker_loop(ctx, dataset_rx, files_tx, report));
+    set.spawn_blocking(|| {
+        write_worker_loop(
+            ctx,
+            dataset_rx,
+            params.files_tx,
+            params.report,
+            params.output_dir,
+        )
+    });
 
     while let Some(handle) = set.join_next().await {
         handle?;
@@ -295,18 +322,17 @@ fn write_worker_loop(
     dataset_rx: Receiver<RDFBDataset>,
     files_tx: Sender<(PathBuf, usize)>,
     report: Option<PrepareStatsReport>,
+    output_dir: PathBuf,
 ) {
     // The index for output file. Used as `prepared.{:06d}.rdfb`.
     let mut file_idx: usize = 1;
     let mut total_written: usize = 0;
 
-    let dir = std::env::temp_dir();
-
     while !ctx.is_cancelled() {
         let Ok(prepared) = dataset_rx.recv() else {
             break;
         };
-        let filename = dir.with_file_name(format!("prepared.{:06}.rdfb", file_idx));
+        let filename = output_dir.join(format!("prepared.{:06}.rdfb", file_idx));
 
         let mut file = std::fs::File::create(&filename).unwrap();
         file.write_all(&prepared.data).unwrap();

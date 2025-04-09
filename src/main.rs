@@ -66,6 +66,13 @@ enum Command {
 /// Options for the prepare command
 #[derive(Debug, Parser)]
 struct PrepareCommand {
+    /// Directory where prepared RDFB files will be stored.
+    ///
+    /// If not specified, a temporary directory will be created in the system's
+    /// temp directory (e.g., /tmp/asimov-dataset/<pid>/).
+    #[arg(short = 'o', long)]
+    output_dir: Option<PathBuf>,
+
     /// Files to prepare. Supported formats: n3, nt, nq, rdf, ttl, trig.
     ///
     /// Each file should contain valid RDF data in one of the supported formats.
@@ -141,8 +148,6 @@ pub async fn main() {
         Command::Prepare(cmd) => cmd.run(options.flags.verbose > 0).await,
         Command::Publish(cmd) => cmd.run(options.flags.verbose > 0).await,
     };
-
-    println!("\n");
 }
 
 impl PrepareCommand {
@@ -195,17 +200,33 @@ impl PrepareCommand {
 
         let (files_tx, files_rx) = crossbeam::channel::unbounded();
 
+        let dir = self.output_dir.unwrap_or_else(|| {
+            create_tmp_dir().expect("Failed to create a temporary output directory")
+        });
+        assert!(
+            std::fs::metadata(&dir)
+                .unwrap_or_else(|err| {
+                    eprintln!("Invalid output directory {:?}: {}", dir.display(), err);
+                    exit(EX_IOERR);
+                })
+                .is_dir(),
+            "{:?} is not a directory",
+            dir.display()
+        );
+
+        let params = asimov_dataset_cli::prepare::Params::new(
+            files.into_iter(),
+            files_tx,
+            report,
+            dir.clone(),
+        );
+
         set.spawn({
             let ctx = ctx.clone();
             async move {
-                asimov_dataset_cli::prepare::prepare_datasets(
-                    ctx,
-                    files.into_iter(),
-                    files_tx,
-                    report,
-                )
-                .await
-                .expect("`prepare` failed");
+                asimov_dataset_cli::prepare::prepare_datasets(ctx, params)
+                    .await
+                    .expect("`prepare` failed");
             }
         });
 
@@ -226,6 +247,8 @@ impl PrepareCommand {
         let _ = set.join_all().await;
 
         ratatui::restore();
+
+        println!("\n\nPrepared RDFB files are in {}", dir.display());
 
         debug!(
             duration = ?std::time::Instant::now().duration_since(start),
@@ -307,20 +330,24 @@ impl PublishCommand {
         let (files_tx, files_rx) = crossbeam::channel::unbounded();
 
         if !unprepared_files.is_empty() {
+            let dir = create_tmp_dir().expect("Failed to create directory for prepared files");
+
             set.spawn({
                 let ctx = ctx.clone();
                 let tx = event_tx.clone();
                 let unprepared_files = unprepared_files.clone().into_iter();
                 let report = Some(PrepareStatsReport { tx });
+
+                let params = asimov_dataset_cli::prepare::Params::new(
+                    unprepared_files,
+                    files_tx,
+                    report,
+                    dir,
+                );
                 async move {
-                    asimov_dataset_cli::prepare::prepare_datasets(
-                        ctx,
-                        unprepared_files,
-                        files_tx,
-                        report,
-                    )
-                    .await
-                    .unwrap();
+                    asimov_dataset_cli::prepare::prepare_datasets(ctx, params)
+                        .await
+                        .unwrap();
                 }
             });
         } else {
@@ -397,5 +424,15 @@ impl PublishCommand {
         let _ = set.join_all().await;
 
         ratatui::restore();
+
+        print!("\n\n");
     }
+}
+
+fn create_tmp_dir() -> std::io::Result<PathBuf> {
+    let mut temp_dir = std::env::temp_dir();
+    temp_dir.push("asimov-dataset");
+    temp_dir.push(std::process::id().to_string());
+    std::fs::create_dir_all(&temp_dir)?;
+    Ok(temp_dir)
 }
