@@ -15,7 +15,7 @@ use asimov_dataset_cli::{
 use clientele::{
     StandardOptions,
     SysexitsError::*,
-    crates::clap::{Parser, Subcommand},
+    crates::clap::{CommandFactory, Parser, Subcommand},
     exit,
 };
 use near_api::AccountId;
@@ -31,7 +31,7 @@ struct Options {
     flags: StandardOptions,
 
     #[clap(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 const PUBLISH_USAGE: &str = "asimov-dataset publish [OPTIONS] <REPOSITORY> <FILES>...\n       \
@@ -144,7 +144,12 @@ pub async fn main() {
         exit(EX_OK);
     }
 
-    match options.command {
+    let Some(command) = options.command else {
+        Options::command().print_help().unwrap();
+        exit(EX_USAGE);
+    };
+
+    match command {
         Command::Prepare(cmd) => cmd.run(options.flags.verbose > 0).await,
         Command::Publish(cmd) => cmd.run(options.flags.verbose > 0).await,
     };
