@@ -89,7 +89,7 @@ struct PublishCommand {
     /// By default, the repository account is used for signing.
     /// Can also be set via the NEAR_SIGNER environment variable.
     #[arg(long)]
-    signer: Option<String>,
+    signer: Option<AccountId>,
 
     /// Optional dataset name in the repository.
     #[arg(long)]
@@ -97,7 +97,7 @@ struct PublishCommand {
 
     /// Repository is the on-chain account address to which the data is published.
     #[arg(required = true)]
-    repository: String,
+    repository: AccountId,
 
     /// Files to publish.
     ///
@@ -243,14 +243,12 @@ impl PublishCommand {
             .filter(|file| std::fs::exists(file).unwrap_or(false))
             .collect();
 
-        let repository: AccountId = self.repository.parse().expect("invalid repository");
-
         let network_config = match self.network.as_deref() {
             Some("mainnet") => near_api::NetworkConfig::mainnet(),
             Some("testnet") => near_api::NetworkConfig::testnet(),
             None => {
                 // infer from repository accountid
-                match repository.as_str().split('.').next_back() {
+                match self.repository.as_str().split('.').next_back() {
                     Some("near") => near_api::NetworkConfig::mainnet(),
                     Some("testnet") => near_api::NetworkConfig::testnet(),
                     _ => {
@@ -267,13 +265,13 @@ impl PublishCommand {
 
         let near_signer = {
             if let Some(signer) = self.signer {
-                signer.parse().expect("invalid account address in --signer")
+                signer
             } else {
                 match std::env::var("NEAR_SIGNER") {
                     Ok(signer) => signer
                         .parse()
                         .expect("invalid account address in NEAR_SIGNER"),
-                    Err(std::env::VarError::NotPresent) => repository.clone(),
+                    Err(std::env::VarError::NotPresent) => self.repository.clone(),
                     Err(err) => {
                         eprintln!("{err}");
                         exit(EX_CONFIG);
@@ -372,7 +370,7 @@ impl PublishCommand {
             async move {
                 asimov_dataset_cli::publish::publish_datasets(
                     ctx,
-                    repository,
+                    self.repository,
                     self.dataset,
                     signer,
                     &network_config,
