@@ -52,6 +52,9 @@ jobs:
         run: |
           sudo apt-get update && \
           sudo apt-get install --assume-yes libudev-dev
+      - name: Limit build parallelism
+        if: contains(matrix.target, 'windows-gnu')
+        run: echo "CARGO_BUILD_JOBS=1" >> $GITHUB_ENV
       - name: Build
         uses: asimov-platform/build-rust-action@v2
         with:
