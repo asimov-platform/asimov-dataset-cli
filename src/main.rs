@@ -4,7 +4,7 @@
 
 mod feature;
 
-use std::{collections::VecDeque, os::unix::fs::MetadataExt, path::PathBuf};
+use std::{collections::VecDeque, os::unix::fs::MetadataExt, path::PathBuf, sync::Arc};
 
 use asimov_dataset_cli::{
     context,
@@ -18,7 +18,9 @@ use clientele::{
     crates::clap::{CommandFactory, Parser, Subcommand},
     exit,
 };
-use near_api::AccountId;
+use color_eyre::Section;
+use eyre::{Context, Result, bail, eyre};
+use near_api::{AccountId, NetworkConfig, Signer};
 use ratatui::TerminalOptions;
 use tokio::task::JoinSet;
 use tracing::debug;
@@ -118,7 +120,9 @@ struct PublishCommand {
 }
 
 #[tokio::main]
-pub async fn main() {
+pub async fn main() -> Result<()> {
+    color_eyre::install()?;
+
     // Load environment variables from `.env`:
     let _ = clientele::dotenv();
 
@@ -145,21 +149,20 @@ pub async fn main() {
     }
 
     let Some(command) = options.command else {
-        Options::command().print_help().unwrap();
+        Options::command().print_help()?;
         exit(EX_USAGE);
     };
 
     match command {
         Command::Prepare(cmd) => cmd.run(options.flags.verbose > 0).await,
         Command::Publish(cmd) => cmd.run(options.flags.verbose > 0).await,
-    };
+    }
 }
 
 impl PrepareCommand {
-    async fn run(self, verbose: bool) {
+    async fn run(self, verbose: bool) -> Result<()> {
         let start = std::time::Instant::now();
 
-        let (ui_event_tx, ui_event_rx) = crossbeam::channel::unbounded();
         let (event_tx, event_rx) = crossbeam::channel::unbounded();
 
         let files: Vec<PathBuf> = self
@@ -185,15 +188,7 @@ impl PrepareCommand {
             ..Default::default()
         };
 
-        let mut set = JoinSet::new();
-
-        let (ctx, cancel) = context::new_cancel_context();
-
-        set.spawn_blocking(move || ui::listen_input(&ui_event_tx));
-
-        let report = Some(asimov_dataset_cli::prepare::PrepareStatsReport {
-            tx: event_tx.clone(),
-        });
+        let report = Some(asimov_dataset_cli::prepare::PrepareStatsReport { tx: event_tx });
 
         let mut terminal = ratatui::init_with_options(TerminalOptions {
             viewport: if !verbose {
@@ -205,9 +200,10 @@ impl PrepareCommand {
 
         let (files_tx, files_rx) = crossbeam::channel::unbounded();
 
-        let dir = self.output_dir.unwrap_or_else(|| {
-            create_tmp_dir().expect("Failed to create a temporary output directory")
-        });
+        let dir = match self.output_dir {
+            Some(dir) => dir,
+            None => create_tmp_dir().wrap_err("Failed to create a temporary output directory")?,
+        };
         assert!(
             std::fs::metadata(&dir)
                 .unwrap_or_else(|err| {
@@ -226,16 +222,17 @@ impl PrepareCommand {
             dir.clone(),
         );
 
+        let mut set: JoinSet<Result<()>> = JoinSet::new();
+
+        let (ctx, cancel) = context::new_cancel_context();
+
         set.spawn({
             let ctx = ctx.clone();
-            async move {
-                asimov_dataset_cli::prepare::prepare_datasets(ctx, params)
-                    .await
-                    .expect("`prepare` failed");
-            }
+            asimov_dataset_cli::prepare::prepare_datasets(ctx, params)
         });
 
-        drop(event_tx);
+        let (ui_event_tx, ui_event_rx) = crossbeam::channel::unbounded();
+        let input_task = set.spawn(ui::listen_input(ui_event_tx));
 
         ui::run_prepare(
             &mut terminal,
@@ -244,12 +241,19 @@ impl PrepareCommand {
             ui_event_rx,
             event_rx,
             || cancel.cancel(),
-        )
-        .unwrap();
+        )?;
 
-        drop(files_rx);
+        drop(files_rx); // for now we do nothing with these
 
-        let _ = set.join_all().await;
+        input_task.abort();
+
+        while let Some(join_result) = set.join_next().await {
+            match join_result {
+                Err(err) if err.is_cancelled() => (),
+                Err(err) => panic!("{err}"),
+                Ok(task_result) => task_result?,
+            }
+        }
 
         ratatui::restore();
 
@@ -259,11 +263,13 @@ impl PrepareCommand {
             duration = ?std::time::Instant::now().duration_since(start),
             "Prepare finished"
         );
+
+        Ok(())
     }
 }
 
 impl PublishCommand {
-    async fn run(self, verbose: bool) {
+    async fn run(self, verbose: bool) -> Result<()> {
         let files: Vec<PathBuf> = self
             .files
             .iter()
@@ -280,14 +286,12 @@ impl PublishCommand {
                     Some("near") => near_api::NetworkConfig::mainnet(),
                     Some("testnet") => near_api::NetworkConfig::testnet(),
                     _ => {
-                        eprintln!("Unable to infer network, please provide --network");
-                        exit(EX_CONFIG);
+                        bail!("Unable to infer network, please provide --network");
                     }
                 }
             }
             Some(network) => {
-                eprintln!("Unknown network name: {}", network);
-                exit(EX_CONFIG);
+                bail!("Unknown network name: {}", network);
             }
         };
 
@@ -298,27 +302,14 @@ impl PublishCommand {
                 match std::env::var("NEAR_SIGNER") {
                     Ok(signer) => signer
                         .parse()
-                        .expect("invalid account address in NEAR_SIGNER"),
+                        .context("Invalid account address in NEAR_SIGNER")?,
                     Err(std::env::VarError::NotPresent) => self.repository.clone(),
-                    Err(err) => {
-                        eprintln!("{err}");
-                        exit(EX_CONFIG);
-                    }
+                    Err(err) => bail!(err),
                 }
             }
         };
 
-        let signer = near_api::signer::keystore::KeystoreSigner::search_for_keys(
-            near_signer,
-            &network_config,
-        )
-        .await
-        .expect("failed to get key in keystore");
-        let signer = near_api::Signer::new(signer).unwrap();
-
-        let mut set = JoinSet::new();
-
-        let (ctx, cancel) = context::new_cancel_context();
+        let signer = get_signer(&near_signer, &network_config).await?;
 
         let (prepared_files, unprepared_files) = publish::split_prepared_files(&files);
 
@@ -334,8 +325,12 @@ impl PublishCommand {
         let (event_tx, event_rx) = crossbeam::channel::unbounded();
         let (files_tx, files_rx) = crossbeam::channel::unbounded();
 
+        let mut set: JoinSet<Result<()>> = JoinSet::new();
+
+        let (ctx, cancel) = context::new_cancel_context();
+
         if !unprepared_files.is_empty() {
-            let dir = create_tmp_dir().expect("Failed to create directory for prepared files");
+            let dir = create_tmp_dir().context("Failed to create directory for prepared files")?;
 
             set.spawn({
                 let ctx = ctx.clone();
@@ -349,11 +344,7 @@ impl PublishCommand {
                     report,
                     dir,
                 );
-                async move {
-                    asimov_dataset_cli::prepare::prepare_datasets(ctx, params)
-                        .await
-                        .unwrap();
-                }
+                asimov_dataset_cli::prepare::prepare_datasets(ctx, params)
             });
         } else {
             drop(files_tx);
@@ -367,10 +358,6 @@ impl PublishCommand {
                 (file, size)
             })
             .collect();
-
-        let (ui_event_tx, ui_event_rx) = crossbeam::channel::unbounded();
-
-        set.spawn_blocking(move || ui::listen_input(&ui_event_tx));
 
         let mut terminal = ratatui::init_with_options(TerminalOptions {
             viewport: if !verbose {
@@ -398,7 +385,6 @@ impl PublishCommand {
         };
 
         set.spawn({
-            let tx = event_tx.clone();
             async move {
                 asimov_dataset_cli::publish::publish_datasets(
                     ctx,
@@ -407,14 +393,14 @@ impl PublishCommand {
                     signer,
                     &network_config,
                     prepared_files.into_iter().chain(files_rx.iter()),
-                    Some(PublishStatsReport { tx }),
+                    Some(PublishStatsReport { tx: event_tx }),
                 )
                 .await
-                .unwrap();
             }
         });
 
-        drop(event_tx);
+        let (ui_event_tx, ui_event_rx) = crossbeam::channel::unbounded();
+        let input_task = set.spawn(ui::listen_input(ui_event_tx));
 
         ui::run_publish(
             &mut terminal,
@@ -423,15 +409,77 @@ impl PublishCommand {
             ui_event_rx,
             event_rx,
             || cancel.cancel(),
-        )
-        .unwrap();
+        )?;
 
-        let _ = set.join_all().await;
+        input_task.abort();
+
+        while let Some(join_result) = set.join_next().await {
+            match join_result {
+                Err(err) if err.is_cancelled() => (),
+                Err(err) => panic!("{err}"),
+                Ok(task_result) => task_result?,
+            }
+        }
 
         ratatui::restore();
 
         print!("\n\n");
+
+        Ok(())
     }
+}
+
+async fn get_signer(account: &AccountId, network: &NetworkConfig) -> Result<Arc<Signer>> {
+    let keystore_result = Signer::from_keystore_with_search_for_keys(account.clone(), network)
+        .await
+        .with_context(|| format!("Failed to get signer from keychain for \"{}\"", account))
+        .and_then(|keystore| Signer::new(keystore).context("Failed to create keychain signer"));
+
+    let keystore_err = match keystore_result {
+        Ok(keystore) => return Ok(keystore),
+        Err(err) => err,
+    };
+
+    let secret_key_result = std::env::var("NEAR_PRIVATE_KEY")
+        .map_err(|err| match err {
+            std::env::VarError::NotPresent => {
+                eyre!("Environment variable NEAR_PRIVATE_KEY is not present")
+            }
+            std::env::VarError::NotUnicode(_os_string) => {
+                eyre!("Environment variable NEAR_PRIVATE_KEY has invalid data",)
+            }
+        })
+        .and_then(|key_bytes| key_bytes.parse().context("Invalid NEAR private key format"))
+        .map(Signer::from_secret_key)
+        .and_then(|secret_key| {
+            Signer::new(secret_key).context("Failed to create signer from private key")
+        });
+
+    let secret_key_err = match secret_key_result {
+        Ok(secret_key) => return Ok(secret_key),
+        Err(err) => err,
+    };
+
+    Err(eyre::eyre!(
+        "Unable to find credentials for NEAR account \"{}\"",
+        account
+    )
+    .with_note(|| {
+        format!(
+            "\nThe CLI tried two methods to find your credentials:\n\
+             1. Searching the system keychain for account \"{}\"\n\
+             2. Looking for a private key in the NEAR_PRIVATE_KEY environment variable\n",
+            account
+        )
+    })
+    .with_section(|| format!("Keychain error: {:#}", keystore_err))
+    .with_section(|| format!("Private key error: {:#}", secret_key_err))
+    .with_suggestion(|| {
+        "\nYou can:\n\
+             • Import your account into the keychain:\n\t $ near account import-account\n\
+             • Set the NEAR_PRIVATE_KEY environment variable with your private key\n\
+             • Use the --signer option to specify a different account that has access to the repository contract"
+    }))
 }
 
 fn create_tmp_dir() -> std::io::Result<PathBuf> {

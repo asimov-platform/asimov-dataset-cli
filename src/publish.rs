@@ -2,11 +2,12 @@
 
 use borsh::BorshSerialize;
 use crossbeam::channel::Sender;
+use eyre::Result;
 use near_api::{
     AccountId, NearGas, NetworkConfig, Transaction,
     near_primitives::action::{Action, FunctionCallAction},
 };
-use std::{error::Error, io::Read, path::PathBuf, sync::Arc};
+use std::{io::Read, path::PathBuf, sync::Arc};
 
 use crate::context::Context;
 
@@ -31,7 +32,7 @@ pub async fn publish_datasets<I>(
     network: &NetworkConfig,
     files: I,
     report: Option<PublishStatsReport>,
-) -> Result<(), Box<dyn Error>>
+) -> Result<()>
 where
     I: Iterator<Item = (PathBuf, usize)>,
 {
