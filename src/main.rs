@@ -4,7 +4,9 @@
 
 mod feature;
 
-use std::{collections::VecDeque, os::unix::fs::MetadataExt, path::PathBuf, sync::Arc};
+use std::{collections::VecDeque, path::PathBuf, sync::Arc};
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 
 use asimov_dataset_cli::{
     context,
@@ -159,6 +161,18 @@ pub async fn main() -> Result<()> {
     }
 }
 
+fn file_size(file: &PathBuf) -> usize {
+    let meta = std::fs::metadata(file).unwrap();
+    #[cfg(unix)]
+    {
+        meta.size() as usize
+    }
+    #[cfg(not(unix))]
+    {
+        meta.len() as usize
+    }
+}
+
 impl PrepareCommand {
     async fn run(self, verbose: bool) -> Result<()> {
         let start = std::time::Instant::now();
@@ -174,10 +188,7 @@ impl PrepareCommand {
         let queued_files: VecDeque<(PathBuf, usize)> = files
             .iter()
             .cloned()
-            .map(|file| {
-                let size = std::fs::metadata(&file).unwrap().size() as usize;
-                (file, size)
-            })
+            .map(|file| (file.clone(), file_size(&file)))
             .collect();
 
         let total_bytes = queued_files.iter().map(|(_, size)| size).sum();
@@ -316,10 +327,7 @@ impl PublishCommand {
         let prepared_files: VecDeque<(PathBuf, usize)> = prepared_files
             .iter()
             .cloned()
-            .map(|file| {
-                let size = std::fs::metadata(&file).unwrap().size() as usize;
-                (file, size)
-            })
+            .map(|file| (file.clone(), file_size(&file)))
             .collect();
 
         let (event_tx, event_rx) = crossbeam::channel::unbounded();
@@ -353,10 +361,7 @@ impl PublishCommand {
         let unprepared_files: VecDeque<(PathBuf, usize)> = unprepared_files
             .iter()
             .cloned()
-            .map(|file| {
-                let size = std::fs::metadata(&file).unwrap().size() as usize;
-                (file, size)
-            })
+            .map(|file| (file.clone(), file_size(&file)))
             .collect();
 
         let mut terminal = ratatui::init_with_options(TerminalOptions {
