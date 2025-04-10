@@ -182,7 +182,7 @@ impl PrepareCommand {
 
         let total_bytes = queued_files.iter().map(|(_, size)| size).sum();
 
-        let ui_state = ui::Prepare {
+        let ui_state = ui::PrepareState {
             total_bytes,
             queued_files,
             ..Default::default()
@@ -370,14 +370,14 @@ impl PublishCommand {
             None
         } else {
             let total_bytes = unprepared_files.iter().map(|(_, size)| size).sum();
-            Some(ui::Prepare {
+            Some(ui::PrepareState {
                 total_bytes,
                 queued_files: unprepared_files,
                 ..Default::default()
             })
         };
         let total_bytes = prepared_files.iter().map(|(_, size)| size).sum();
-        let ui_state = ui::Publish {
+        let ui_state = ui::PublishState {
             queued_files: prepared_files.clone(),
             total_bytes,
             prepare: prepare_state,
