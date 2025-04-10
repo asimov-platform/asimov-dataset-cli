@@ -52,7 +52,7 @@ const PREPARE_USAGE: &str = "asimov-dataset prepare [OPTIONS] <FILES>...\n      
 enum Command {
     /// Publish dataset files to an on-chain repository contract.
     ///
-    /// This command can publish both raw RDF data files and pre-prepared RDFB files.
+    /// This command can publish both raw RDF data files and pre-prepared RDF/Borsh files.
     /// Raw RDF files will be automatically prepared before publishing.
     #[command(override_usage = PUBLISH_USAGE)]
     Publish(PublishCommand),
@@ -68,7 +68,7 @@ enum Command {
 /// Options for the prepare command
 #[derive(Debug, Parser)]
 struct PrepareCommand {
-    /// Directory where prepared RDFB files will be stored.
+    /// Directory where prepared RDF/Borsh files will be stored.
     ///
     /// If not specified, a temporary directory will be created in the system's
     /// temp directory (e.g., /tmp/asimov-dataset/<pid>/).
@@ -114,7 +114,7 @@ struct PublishCommand {
     ///
     /// - Raw RDF files (formats: n3, nt, nq, rdf, ttl, trig) which will be prepared automatically
     ///
-    /// - Pre-prepared RDFB files from previous 'prepare' command runs
+    /// - Pre-prepared RDF/Borsh files from previous 'prepare' command runs
     #[arg(required = true)]
     files: Vec<String>,
 }
@@ -257,7 +257,7 @@ impl PrepareCommand {
 
         ratatui::restore();
 
-        println!("\n\nPrepared RDFB files are in {}", dir.display());
+        println!("\n\nPrepared RDF/Borsh files are in {}", dir.display());
 
         debug!(
             duration = ?std::time::Instant::now().duration_since(start),
