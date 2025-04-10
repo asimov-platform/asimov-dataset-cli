@@ -58,7 +58,7 @@ jobs:
           target: ${{ matrix.target }}
           artifact-name: ${{ matrix.artifact }}
           artifact-prefix: asimov
-          binary-name: asimov_dataset
+          binary-name: asimov-dataset
           binary-extension: ${{ matrix.extension }}
           strip-artifact: ${{ matrix.strip || 'false' }}
           use-zigbuild: ${{ matrix.use-zigbuild || 'false' }}
