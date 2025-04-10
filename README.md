@@ -41,6 +41,55 @@ Now, installing ASIMOV CLI is as easy as running:
 scoop install asimov-platform/asimov-dataset-cli
 ```
 
+## Setup
+
+### NEAR Account
+
+If you don't have a NEAR account yet, you can create one using NEAR CLI:
+
+```bash
+near account create-account
+```
+
+Follow the prompts to complete the account creation process.
+
+## Signing transactions
+
+To publish datasets to the ASIMOV network, you need to sign transactions with your NEAR account. The CLI supports two methods:
+
+### 1. Use system keychain
+
+If your system keychain already contains your credentials you don't need to do anything further. You will be prompted to allow access to the the signer account's private key when publishing.
+
+Otherwise if you have a NEAR account which is not in your system keychain, you can import it to your system keychain:
+
+```bash
+near account import-account
+```
+
+Then follow the prompts and select `Store the access key in my keychain` when asked.
+
+### 2. Use Environment Variable
+
+If you prefer not to store your credentials in the system keychain or you're having trouble authenticating with the keychain, you can provide your private key via an environment variable:
+
+```bash
+# Get your private key if you don't have it yet
+near account export-account
+
+# Set the environment variable with your private key
+export NEAR_PRIVATE_KEY="ed25519:..."
+
+# Run the command (no additional authentication needed)
+asimov-dataset publish your-repo.testnet ./data.ttl
+```
+
+You can also specify a different signing account using the `--signer` option or `NEAR_SIGNER` environment variable:
+
+```bash
+asimov-dataset publish --signer other-account.testnet your-repo.testnet ./data.ttl
+```
+
 ## 👉 Examples
 
 ```bash

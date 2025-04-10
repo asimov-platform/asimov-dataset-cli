@@ -1,12 +1,12 @@
 // This is free and unencumbered software released into the public domain.
 
 use crossbeam::channel::{Receiver, Sender};
+use eyre::{Context as _, OptionExt, Result};
 use rdf_rs::model::Statement;
 use rdf_writer::Writer;
 use std::{
     cell::RefCell,
     collections::VecDeque,
-    error::Error,
     fs::File,
     io::{BufReader, Write},
     path::PathBuf,
@@ -52,7 +52,7 @@ impl<I> Params<I> {
     }
 }
 
-pub async fn prepare_datasets<I>(ctx: Context, params: Params<I>) -> Result<(), Box<dyn Error>>
+pub async fn prepare_datasets<I>(ctx: Context, params: Params<I>) -> Result<()>
 where
     I: Iterator<Item = PathBuf>,
 {
@@ -88,7 +88,7 @@ where
     });
 
     while let Some(handle) = set.join_next().await {
-        handle?;
+        handle??;
     }
     Ok(())
 }
@@ -109,7 +109,7 @@ fn read_worker_loop(
     files: &[PathBuf],
     batch_tx: Sender<StatementBatch>,
     report: Option<PrepareStatsReport>,
-) {
+) -> Result<()> {
     struct CountingBufReader<R> {
         inner: BufReader<R>,
         count: Rc<RefCell<usize>>,
@@ -137,8 +137,8 @@ fn read_worker_loop(
             .extension()
             .and_then(std::ffi::OsStr::to_str)
             .and_then(oxrdfio::RdfFormat::from_extension)
-            .unwrap();
-        let reader = File::open(file).unwrap();
+            .ok_or_eyre("Unknown file format")?;
+        let reader = File::open(file).context("Failed to open input file")?;
         let reader = BufReader::with_capacity(1 << 20, reader);
         let count = Rc::new(RefCell::new(0));
         let reader = CountingBufReader::new(reader, count.clone());
@@ -151,7 +151,7 @@ fn read_worker_loop(
                 let Some(quad) = reader.next() else {
                     break true;
                 };
-                let quad = quad.unwrap();
+                let quad = quad?;
                 quads.push((statement_index, quad));
                 statement_index += 1;
                 if quads.len() >= batch_size {
@@ -178,17 +178,18 @@ fn read_worker_loop(
             }
 
             if batch_tx.send(StatementBatch { quads }).is_err() {
-                return;
+                return Ok(());
             }
         }
     }
+    Ok(())
 }
 
 fn prepare_worker_loop(
     ctx: Context,
     batch_rx: Receiver<StatementBatch>,
     dataset_tx: Sender<RDFBDataset>,
-) {
+) -> Result<()> {
     // Buffer for storing statements that need to be retried
     let mut statement_buffer: VecDeque<(usize, Box<dyn Statement>)> = VecDeque::new();
     // write_count is how many we're trying to serialize each iteration
@@ -304,7 +305,7 @@ fn prepare_worker_loop(
             })
             .is_err()
         {
-            return;
+            return Ok(());
         }
 
         statement_buffer.drain(..try_write_count);
@@ -315,15 +316,17 @@ fn prepare_worker_loop(
         lowest_overflow = usize::MAX;
         skipped_statements = 0;
     }
+
+    Ok(())
 }
 
 fn write_worker_loop(
-    ctx: Context,
+    ctx: crate::context::Context,
     dataset_rx: Receiver<RDFBDataset>,
     files_tx: Sender<(PathBuf, usize)>,
     report: Option<PrepareStatsReport>,
     output_dir: PathBuf,
-) {
+) -> Result<()> {
     // The index for output file. Used as `prepared.{:06d}.rdfb`.
     let mut file_idx: usize = 1;
     let mut total_written: usize = 0;
@@ -334,14 +337,16 @@ fn write_worker_loop(
         };
         let filename = output_dir.join(format!("prepared.{:06}.rdfb", file_idx));
 
-        let mut file = std::fs::File::create(&filename).unwrap();
-        file.write_all(&prepared.data).unwrap();
+        let mut file =
+            std::fs::File::create(&filename).context("Failed to create output file for RDFB")?;
+        file.write_all(&prepared.data)
+            .context("Failed to write RDFB data")?;
 
         if files_tx
             .send((filename.clone(), prepared.statement_count))
             .is_err()
         {
-            return;
+            return Ok(());
         }
 
         if let Some(ref report) = report {
@@ -369,6 +374,8 @@ fn write_worker_loop(
         );
         file_idx += 1;
     }
+
+    Ok(())
 }
 
 struct SharedBufferWriter {

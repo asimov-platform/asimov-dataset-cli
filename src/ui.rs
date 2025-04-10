@@ -1,14 +1,11 @@
 // This is free and unencumbered software released into the public domain.
 
-use std::{
-    collections::VecDeque,
-    path::PathBuf,
-    time::{Duration, Instant},
-};
+use std::{collections::VecDeque, path::PathBuf};
 
-use color_eyre::Result;
 use crossbeam::channel::{Receiver, Sender, TryRecvError};
 use crossterm::event::{self, KeyCode, KeyModifiers};
+use eyre::Result;
+use futures::StreamExt;
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout, Rect},
@@ -123,7 +120,6 @@ pub struct PublishProgress {
 pub enum UIEvent {
     Input(event::KeyEvent),
     Resize,
-    Tick,
 }
 
 pub enum Event {
@@ -132,32 +128,25 @@ pub enum Event {
     Publish(PublishProgress),
 }
 
-pub fn listen_input(tx: &Sender<UIEvent>) {
-    let tick_rate = Duration::from_millis(100);
-    let mut last_tick = Instant::now();
-    loop {
-        // poll for tick rate duration, if no events, send tick event.
-        let timeout = tick_rate.saturating_sub(last_tick.elapsed());
-        if event::poll(timeout).unwrap() {
-            let event = match event::read() {
-                Ok(event) => match event {
+pub async fn listen_input(tx: Sender<UIEvent>) -> Result<()> {
+    let mut stream = crossterm::event::EventStream::new();
+    while let Some(event) = stream.next().await {
+        match event {
+            Ok(event) => {
+                let event = match event {
                     event::Event::Key(key) => UIEvent::Input(key),
                     event::Event::Resize(_, _) => UIEvent::Resize,
                     _ => continue,
-                },
-                Err(_) => break,
-            };
-            if tx.send(event).is_err() {
-                break;
+                };
+
+                if tx.send(event).is_err() {
+                    return Ok(());
+                }
             }
-        }
-        if last_tick.elapsed() >= tick_rate {
-            if tx.send(UIEvent::Tick).is_err() {
-                break;
-            }
-            last_tick = Instant::now();
+            Err(err) => return Err(err.into()),
         }
     }
+    Ok(())
 }
 
 pub fn run_prepare<T: FnOnce()>(
@@ -183,7 +172,6 @@ pub fn run_prepare<T: FnOnce()>(
                     }
                 }
                 UIEvent::Resize => terminal.autoresize()?,
-                UIEvent::Tick => {}
             },
             Err(TryRecvError::Empty) => {}
             Err(err) => panic!("{err}"),
@@ -234,7 +222,6 @@ pub fn run_publish<T: FnOnce()>(
                     }
                 }
                 UIEvent::Resize => terminal.autoresize()?,
-                UIEvent::Tick => {}
             },
             Err(TryRecvError::Empty) => {}
             Err(err) => panic!("{err}"),
