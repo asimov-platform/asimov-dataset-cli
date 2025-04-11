@@ -2,10 +2,10 @@
 
 use borsh::BorshSerialize;
 use crossbeam::channel::Sender;
-use eyre::Result;
+use eyre::{Context as _, Result, bail, eyre};
 use near_api::{
-    AccountId, NearGas, NetworkConfig, Transaction,
-    near_primitives::action::{Action, FunctionCallAction},
+    AccountId, Contract, NearGas, NetworkConfig, Transaction,
+    near_primitives::action::{Action, DeployContractAction, FunctionCallAction},
 };
 use std::{io::Read, path::PathBuf, sync::Arc};
 
@@ -22,6 +22,28 @@ pub fn split_prepared_files(files: &[PathBuf]) -> (Vec<PathBuf>, Vec<PathBuf>) {
         .iter()
         .cloned()
         .partition(|file| file.extension().is_some_and(|ext| ext == "rdfb"))
+}
+
+pub async fn upload_repository_contract(
+    repository: AccountId,
+    signer: Arc<near_api::Signer>,
+    network: &NetworkConfig,
+) -> Result<()> {
+    let code = include_bytes!("../assets/log_vault.wasm").to_vec();
+    let tx_outcome = Transaction::construct(repository.clone(), repository.clone())
+        .add_action(Action::DeployContract(DeployContractAction { code }))
+        .with_signer(signer)
+        .send_to(network)
+        .await
+        .context("Failed to send DeployContract tx to RPC")?;
+
+    use near_api::near_primitives::views::FinalExecutionStatus;
+    match tx_outcome.status {
+        FinalExecutionStatus::NotStarted => todo!(),
+        FinalExecutionStatus::Started => todo!(),
+        FinalExecutionStatus::SuccessValue(_items) => Ok(()),
+        FinalExecutionStatus::Failure(error) => Err(eyre!(error)),
+    }
 }
 
 pub async fn publish_datasets<I>(

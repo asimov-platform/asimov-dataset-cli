@@ -108,6 +108,10 @@ struct PublishCommand {
     #[arg(required = true)]
     repository: AccountId,
 
+    /// Upload a simple contract at the repository address before uploading RDF data.
+    #[arg(long)]
+    upload_contract: bool,
+
     /// Files to publish.
     ///
     /// Supports both:
@@ -270,13 +274,6 @@ impl PrepareCommand {
 
 impl PublishCommand {
     async fn run(self, verbose: bool) -> Result<()> {
-        let files: Vec<PathBuf> = self
-            .files
-            .iter()
-            .map(PathBuf::from)
-            .filter(|file| std::fs::exists(file).unwrap_or(false))
-            .collect();
-
         let network_config = match self.network.as_deref() {
             Some("mainnet") => near_api::NetworkConfig::mainnet(),
             Some("testnet") => near_api::NetworkConfig::testnet(),
@@ -310,6 +307,23 @@ impl PublishCommand {
         };
 
         let signer = get_signer(&near_signer, &network_config).await?;
+
+        if self.upload_contract {
+            asimov_dataset_cli::publish::upload_repository_contract(
+                self.repository.clone(),
+                signer.clone(),
+                &network_config,
+            )
+            .await
+            .context("Failed uploading contract")?;
+        }
+
+        let files: Vec<PathBuf> = self
+            .files
+            .iter()
+            .map(PathBuf::from)
+            .filter(|file| std::fs::exists(file).unwrap_or(false))
+            .collect();
 
         let (prepared_files, unprepared_files) = publish::split_prepared_files(&files);
 
