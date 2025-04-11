@@ -28,12 +28,14 @@ pub struct PrepareStatsReport {
     pub tx: Sender<crate::ui::Event>,
 }
 
-#[derive(Debug)]
+#[derive(derive_builder::Builder, Debug)]
+#[builder(pattern = "owned")]
 pub struct Params<I> {
     files: I,
     files_tx: Sender<(PathBuf, usize)>,
-    report: Option<PrepareStatsReport>,
     output_dir: PathBuf,
+    #[builder(setter(into, strip_option), default)]
+    report: Option<PrepareStatsReport>,
 }
 
 impl<I> Params<I> {

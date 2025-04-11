@@ -192,8 +192,6 @@ impl PrepareCommand {
             ..Default::default()
         };
 
-        let report = Some(asimov_dataset_cli::prepare::PrepareStatsReport { tx: event_tx });
-
         let mut terminal = ratatui::init_with_options(TerminalOptions {
             viewport: if !verbose {
                 ratatui::Viewport::Inline(2)
@@ -219,12 +217,12 @@ impl PrepareCommand {
             dir.display()
         );
 
-        let params = asimov_dataset_cli::prepare::Params::new(
-            files.into_iter(),
-            files_tx,
-            report,
-            dir.clone(),
-        );
+        let params = asimov_dataset_cli::prepare::ParamsBuilder::default()
+            .files(files.into_iter())
+            .files_tx(files_tx)
+            .output_dir(dir.clone())
+            .report(asimov_dataset_cli::prepare::PrepareStatsReport { tx: event_tx })
+            .build()?;
 
         let mut set: JoinSet<Result<()>> = JoinSet::new();
 
@@ -292,7 +290,7 @@ impl PublishCommand {
             }
         };
 
-        let near_signer = {
+        let signer_id = {
             if let Some(signer) = self.signer {
                 signer
             } else {
@@ -306,11 +304,12 @@ impl PublishCommand {
             }
         };
 
-        let signer = get_signer(&near_signer, &network_config).await?;
+        let signer = get_signer(&signer_id, &network_config).await?;
 
         if self.upload_contract {
             asimov_dataset_cli::publish::upload_repository_contract(
                 self.repository.clone(),
+                signer_id.clone(),
                 signer.clone(),
                 &network_config,
             )
@@ -350,14 +349,14 @@ impl PublishCommand {
                 let ctx = ctx.clone();
                 let tx = event_tx.clone();
                 let unprepared_files = unprepared_files.clone().into_iter();
-                let report = Some(PrepareStatsReport { tx });
+                let report = PrepareStatsReport { tx };
 
-                let params = asimov_dataset_cli::prepare::Params::new(
-                    unprepared_files,
-                    files_tx,
-                    report,
-                    dir,
-                );
+                let params = asimov_dataset_cli::prepare::ParamsBuilder::default()
+                    .files(unprepared_files)
+                    .files_tx(files_tx)
+                    .output_dir(dir.clone())
+                    .report(report)
+                    .build()?;
                 asimov_dataset_cli::prepare::prepare_datasets(ctx, params)
             });
         } else {
@@ -398,19 +397,18 @@ impl PublishCommand {
             ..Default::default()
         };
 
+        let params = asimov_dataset_cli::publish::ParamsBuilder::default()
+            .signer_id(signer_id)
+            .signer(signer)
+            .repository(self.repository)
+            .dataset(self.dataset)
+            .network(network_config)
+            .files(prepared_files.into_iter().chain(files_rx.into_iter()))
+            .report(PublishStatsReport { tx: event_tx })
+            .build()?;
+
         set.spawn({
-            async move {
-                asimov_dataset_cli::publish::publish_datasets(
-                    ctx,
-                    self.repository,
-                    self.dataset,
-                    signer,
-                    &network_config,
-                    prepared_files.into_iter().chain(files_rx.iter()),
-                    Some(PublishStatsReport { tx: event_tx }),
-                )
-                .await
-            }
+            async move { asimov_dataset_cli::publish::publish_datasets(ctx, params).await }
         });
 
         let (ui_event_tx, ui_event_rx) = crossbeam::channel::unbounded();
