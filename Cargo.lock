@@ -2565,6 +2565,7 @@ version = "0.1.0"
 dependencies = [
  "crunchy",
  "near-api",
+ "openssl",
  "tokio",
 ]
 
