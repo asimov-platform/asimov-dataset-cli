@@ -19,6 +19,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     continue-on-error: false
     steps:
+      - name: Install Strawberry Perl
+        run: choco install strawberryperl --version 5.32.1.1 -y
+
       - name: Build
         uses: asimov-platform/build-rust-action@v2
         env:
