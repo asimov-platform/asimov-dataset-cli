@@ -21,6 +21,8 @@ jobs:
     steps:
       - name: Build
         uses: asimov-platform/build-rust-action@v2
+        env:
+          OPENSSL_NO_VENDOR: "0"
 
         with:
           target: ${{ matrix.target }}
