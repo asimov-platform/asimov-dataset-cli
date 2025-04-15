@@ -13,7 +13,7 @@ jobs:
         include:
           - os: ubuntu-latest
             artifact: windows-x64
-            target: x86_64-pc-windows-msvc
+            target: x86_64-pc-windows-gnu
             extension: exe
     name: Build ${{ matrix.artifact }}
     runs-on: ${{ matrix.os }}
