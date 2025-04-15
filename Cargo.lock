@@ -2566,7 +2566,6 @@ dependencies = [
  "crunchy",
  "near-api",
  "near-sdk",
- "openssl-sys",
  "tokio",
 ]
 
