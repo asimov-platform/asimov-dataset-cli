@@ -49,11 +49,9 @@ tokio = { version = "1.44.1", features = ["rt-multi-thread", "macros"] }
 tracing = "0.1.41"
 tracing-subscriber = "0.3.19"
 
-# TODO: remove `git =` once rdf.rs packages at 0.2.1 are published to crates.io
-rdf_rs = { version = "0.2.1", git = "https://github.com/rust-rdf/rdf.rs.git" }
-rdf-borsh = { version = "0.2.1", git = "https://github.com/rust-rdf/rdf.rs.git" }
-rdf-writer = { version = "0.2.1", git = "https://github.com/rust-rdf/rdf.rs.git" }
-tracing-indicatif = "0.3.9"
+rdf_rs = "0.2.1"
+rdf-borsh = "0.2.1"
+rdf-writer = "0.2.1"
 
 [[bin]]
 name = "asimov-dataset"
@@ -63,15 +61,3 @@ path = "src/main.rs"
 opt-level = 3
 strip = "symbols"
 #debug = true
-
-# TODO: remove once rdf.rs packages at 0.2.1 are published to crates.io
-[patch.crates-io]
-rdf_rs =     { git = "https://github.com/rust-rdf/rdf.rs.git" }
-rdf-borsh =  { git = "https://github.com/rust-rdf/rdf.rs.git" }
-rdf-derive = { git = "https://github.com/rust-rdf/rdf.rs.git" }
-rdf-format = { git = "https://github.com/rust-rdf/rdf.rs.git" }
-rdf-model =  { git = "https://github.com/rust-rdf/rdf.rs.git" }
-rdf-query =  { git = "https://github.com/rust-rdf/rdf.rs.git" }
-rdf-reader = { git = "https://github.com/rust-rdf/rdf.rs.git" }
-rdf-vocab =  { git = "https://github.com/rust-rdf/rdf.rs.git" }
-rdf-writer = { git = "https://github.com/rust-rdf/rdf.rs.git" }
