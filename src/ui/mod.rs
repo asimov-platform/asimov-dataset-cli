@@ -1,154 +1,194 @@
 // This is free and unencumbered software released into the public domain.
 
-use crossbeam::channel::{Receiver, Sender, TryRecvError};
-use crossterm::event::{self, KeyCode, KeyModifiers};
+use crossbeam::channel::Receiver;
 use eyre::Result;
-use futures::StreamExt;
-use prepare::draw_prepare;
-use publish::draw_publish;
-use ratatui::{
-    DefaultTerminal,
-    layout::{Constraint, Layout},
-};
 
-mod format;
 mod prepare;
 mod publish;
 
+use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 pub use prepare::{PrepareProgress, PrepareState, ReaderProgress};
 pub use publish::{PublishProgress, PublishState};
 
 pub enum UIEvent {
-    Input(event::KeyEvent),
     Resize,
 }
 
+#[derive(Debug)]
 pub enum Event {
     Reader(ReaderProgress),
     Prepare(PrepareProgress),
     Publish(PublishProgress),
 }
 
-pub async fn listen_input(tx: Sender<UIEvent>) -> Result<()> {
-    let mut stream = crossterm::event::EventStream::new();
-    while let Some(event) = stream.next().await {
-        match event {
-            Ok(event) => {
-                let event = match event {
-                    event::Event::Key(key) => UIEvent::Input(key),
-                    event::Event::Resize(_, _) => UIEvent::Resize,
-                    _ => continue,
-                };
+pub fn run_prepare(
+    verbosity: u8,
+    mut state: PrepareState,
+    progress_rx: Receiver<Event>,
+) -> Result<()> {
+    let parsing_style =
+        ProgressStyle::with_template("{msg:10} [{bar:40}] {binary_bytes} / {binary_total_bytes}")
+            .unwrap()
+            .progress_chars("##-");
 
-                if tx.send(event).is_err() {
-                    return Ok(());
+    let prepare_style =
+        ProgressStyle::with_template("{msg:10} [{bar:40}] {human_pos} / {human_len}")
+            .unwrap()
+            .progress_chars("##-");
+
+    let multi = MultiProgress::new();
+    if verbosity < 1 {
+        // only show bars for `-v`
+        multi.set_draw_target(ProgressDrawTarget::hidden());
+    }
+    let reader_bar = ProgressBar::new(state.total_bytes as u64)
+        .with_message("Parsing")
+        .with_style(parsing_style);
+    let prepare_bar = ProgressBar::new(0)
+        .with_message("Batching")
+        .with_style(prepare_style);
+
+    multi.add(reader_bar.clone());
+    multi.add(prepare_bar.clone());
+
+    while let Ok(event) = progress_rx.recv() {
+        tracing::debug!(?event);
+
+        match event {
+            Event::Reader(progress) => {
+                reader_bar.inc(progress.bytes as u64);
+                prepare_bar.inc_length(progress.statement_count as u64);
+                if progress.finished && verbosity > 1 {
+                    multi.println(format!(
+                        "✅ Finished reading file {}",
+                        progress.filename.display()
+                    ))?;
                 }
+                state.update_reader_state(progress);
             }
-            Err(err) => return Err(err.into()),
+            Event::Prepare(progress) => {
+                prepare_bar.inc(progress.statement_count as u64);
+                if verbosity > 1 {
+                    if let Some(filename) = progress
+                        .filename
+                        .file_name()
+                        .and_then(std::ffi::OsStr::to_str)
+                    {
+                        multi.println(format!("✅ Prepared batch {}", filename))?;
+                    }
+                }
+                state.update_prepare_state(progress);
+            }
+            Event::Publish(_) => unreachable!(),
         }
     }
+
+    reader_bar.finish();
+    prepare_bar.finish();
+
     Ok(())
 }
 
-pub fn run_prepare<T: FnOnce()>(
-    terminal: &mut DefaultTerminal,
-    verbose: bool,
-    mut state: PrepareState,
-    input_rx: Receiver<UIEvent>,
-    progress_rx: Receiver<Event>,
-    quit_callback: T,
-) -> Result<()> {
-    loop {
-        terminal.draw(|frame| draw_prepare(frame, frame.area(), &state, verbose))?;
-
-        match input_rx.try_recv() {
-            Ok(event) => match event {
-                UIEvent::Input(event) => {
-                    if event.code == KeyCode::Char('q')
-                        || (event.code == KeyCode::Char('c')
-                            && event.modifiers == KeyModifiers::CONTROL)
-                    {
-                        quit_callback();
-                        return Ok(());
-                    }
-                }
-                UIEvent::Resize => terminal.autoresize()?,
-            },
-            Err(TryRecvError::Empty) => {}
-            Err(err) => panic!("{err}"),
-        }
-
-        match progress_rx.recv() {
-            Err(_) => return Ok(()), // no more updates, exit
-            Ok(event) => match event {
-                Event::Reader(progress) => state.update_reader_state(progress),
-                Event::Prepare(progress) => state.update_prepare_state(progress),
-                Event::Publish(_) => unreachable!(),
-            },
-        }
-    }
-}
-
-pub fn run_publish<T: FnOnce()>(
-    terminal: &mut DefaultTerminal,
-    verbose: bool,
+pub fn run_publish(
+    verbosity: u8,
     mut state: PublishState,
-    input_rx: Receiver<UIEvent>,
     progress_rx: Receiver<Event>,
-    quit_callback: T,
 ) -> Result<()> {
-    loop {
-        terminal.draw(|frame| {
-            if let Some(ref prepare) = state.prepare {
-                let [prepare_area, publish_area] =
-                    Layout::vertical([Constraint::Fill(1), Constraint::Fill(1)])
-                        .areas(frame.area());
+    let parsing_style =
+        ProgressStyle::with_template("{msg:10} [{bar:40}] {binary_bytes} / {binary_total_bytes}")
+            .unwrap()
+            .progress_chars("##-");
 
-                draw_prepare(frame, prepare_area, prepare, verbose);
-                draw_publish(frame, publish_area, &state, verbose);
-            } else {
-                draw_publish(frame, frame.area(), &state, verbose);
+    let prepare_style =
+        ProgressStyle::with_template("{msg:10} [{bar:40}] {human_pos} / {human_len}")
+            .unwrap()
+            .progress_chars("##-");
+
+    let upload_style =
+        ProgressStyle::with_template("{msg:10} [{bar:40}] {human_pos} / {human_len}")
+            .unwrap()
+            .progress_chars("##-");
+
+    let multi = MultiProgress::new();
+    if verbosity < 1 {
+        // only show bars for `-v`
+        multi.set_draw_target(ProgressDrawTarget::hidden());
+    }
+
+    let reader_bar = multi.add(
+        ProgressBar::new(
+            state
+                .prepare
+                .as_ref()
+                .map(|state| state.total_bytes)
+                .unwrap_or_default() as u64,
+        )
+        .with_message("Parsing")
+        .with_style(parsing_style),
+    );
+    let prepare_bar = multi.add(
+        ProgressBar::new(0)
+            .with_message("Batching")
+            .with_style(prepare_style),
+    );
+    let upload_bar = multi.add(
+        ProgressBar::new(0)
+            .with_message("Upload")
+            .with_style(upload_style),
+    );
+
+    while let Ok(event) = progress_rx.recv() {
+        tracing::debug!(?event);
+
+        match event {
+            Event::Reader(progress) => {
+                reader_bar.inc(progress.bytes as u64);
+                prepare_bar.inc_length(progress.statement_count as u64);
+                if progress.finished && verbosity > 1 {
+                    multi.println(format!(
+                        "✅ Finished reading file {}",
+                        progress.filename.display()
+                    ))?;
+                }
+                if let Some(ref mut state) = state.prepare {
+                    state.update_reader_state(progress);
+                }
             }
-        })?;
-
-        match input_rx.try_recv() {
-            Ok(event) => match event {
-                UIEvent::Input(event) => {
-                    if event.code == KeyCode::Char('q')
-                        || (event.code == KeyCode::Char('c')
-                            && event.modifiers == KeyModifiers::CONTROL)
+            Event::Prepare(progress) => {
+                prepare_bar.inc(progress.statement_count as u64);
+                upload_bar.inc_length(1);
+                if verbosity > 1 {
+                    if let Some(filename) = progress
+                        .filename
+                        .file_name()
+                        .and_then(std::ffi::OsStr::to_str)
                     {
-                        quit_callback();
-                        return Ok(());
+                        multi.println(format!("✅ Prepared batch {}", filename))?;
                     }
                 }
-                UIEvent::Resize => terminal.autoresize()?,
-            },
-            Err(TryRecvError::Empty) => {}
-            Err(err) => panic!("{err}"),
-        }
-
-        match progress_rx.recv() {
-            Err(_) => return Ok(()),
-            Ok(event) => match event {
-                Event::Reader(progress) => state
-                    .prepare
-                    .as_mut()
-                    .unwrap()
-                    .update_reader_state(progress),
-                Event::Prepare(progress) => {
-                    state.total_bytes += progress.bytes;
-                    state
-                        .queued_files
-                        .push_back((progress.filename.clone(), progress.statement_count));
-                    state
-                        .prepare
-                        .as_mut()
-                        .unwrap()
-                        .update_prepare_state(progress);
+                if let Some(ref mut state) = state.prepare {
+                    state.update_prepare_state(progress);
                 }
-                Event::Publish(progress) => state.update_publish_state(progress),
-            },
+            }
+            Event::Publish(progress) => {
+                upload_bar.inc(1);
+                if verbosity > 1 {
+                    if let Some(filename) = progress
+                        .filename
+                        .file_name()
+                        .and_then(std::ffi::OsStr::to_str)
+                    {
+                        multi.println(format!("✅ Uploaded batch {}", filename))?;
+                    }
+                }
+                state.update_publish_state(progress);
+            }
         }
     }
+
+    reader_bar.finish();
+    prepare_bar.finish();
+    upload_bar.finish();
+
+    Ok(())
 }

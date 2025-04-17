@@ -21,7 +21,6 @@ use clientele::{
 use color_eyre::Section;
 use eyre::{Context, Result, bail, eyre};
 use near_api::{AccountId, NetworkConfig, Signer};
-use ratatui::TerminalOptions;
 use tokio::task::JoinSet;
 use tracing::debug;
 
@@ -158,13 +157,13 @@ pub async fn main() -> Result<()> {
     };
 
     match command {
-        Command::Prepare(cmd) => cmd.run(options.flags.verbose > 0).await,
-        Command::Publish(cmd) => cmd.run(options.flags.verbose > 0).await,
+        Command::Prepare(cmd) => cmd.run(options.flags.verbose).await,
+        Command::Publish(cmd) => cmd.run(options.flags.verbose).await,
     }
 }
 
 impl PrepareCommand {
-    async fn run(self, verbose: bool) -> Result<()> {
+    async fn run(self, verbosity: u8) -> Result<()> {
         let start = std::time::Instant::now();
 
         let (event_tx, event_rx) = crossbeam::channel::unbounded();
@@ -191,14 +190,6 @@ impl PrepareCommand {
             queued_files,
             ..Default::default()
         };
-
-        let mut terminal = ratatui::init_with_options(TerminalOptions {
-            viewport: if !verbose {
-                ratatui::Viewport::Inline(2)
-            } else {
-                ratatui::Viewport::Inline(15)
-            },
-        });
 
         let (files_tx, files_rx) = crossbeam::channel::unbounded();
 
@@ -233,21 +224,9 @@ impl PrepareCommand {
             asimov_dataset_cli::prepare::prepare_datasets(ctx, params)
         });
 
-        let (ui_event_tx, ui_event_rx) = crossbeam::channel::unbounded();
-        let input_task = set.spawn(ui::listen_input(ui_event_tx));
-
-        ui::run_prepare(
-            &mut terminal,
-            verbose,
-            ui_state,
-            ui_event_rx,
-            event_rx,
-            || cancel.cancel(),
-        )?;
+        ui::run_prepare(verbosity, ui_state, event_rx)?;
 
         drop(files_rx); // for now we do nothing with these
-
-        input_task.abort();
 
         while let Some(join_result) = set.join_next().await {
             match join_result {
@@ -257,9 +236,7 @@ impl PrepareCommand {
             }
         }
 
-        ratatui::restore();
-
-        println!("\n\nPrepared RDF/Borsh files are in {}", dir.display());
+        println!("Prepared RDF/Borsh files are in {}", dir.display());
 
         debug!(
             duration = ?std::time::Instant::now().duration_since(start),
@@ -271,7 +248,7 @@ impl PrepareCommand {
 }
 
 impl PublishCommand {
-    async fn run(self, verbose: bool) -> Result<()> {
+    async fn run(self, verbosity: u8) -> Result<()> {
         let network_config = match self.network.as_deref() {
             Some("mainnet") => near_api::NetworkConfig::mainnet(),
             Some("testnet") => near_api::NetworkConfig::testnet(),
@@ -372,13 +349,6 @@ impl PublishCommand {
             })
             .collect();
 
-        let mut terminal = ratatui::init_with_options(TerminalOptions {
-            viewport: if !verbose {
-                ratatui::Viewport::Inline(4)
-            } else {
-                ratatui::Viewport::Inline(20)
-            },
-        });
         let prepare_state = if unprepared_files.is_empty() {
             None
         } else {
@@ -389,13 +359,6 @@ impl PublishCommand {
                 ..Default::default()
             })
         };
-        let total_bytes = prepared_files.iter().map(|(_, size)| size).sum();
-        let ui_state = ui::PublishState {
-            queued_files: prepared_files.clone(),
-            total_bytes,
-            prepare: prepare_state,
-            ..Default::default()
-        };
 
         let params = asimov_dataset_cli::publish::ParamsBuilder::default()
             .signer_id(signer_id)
@@ -403,7 +366,12 @@ impl PublishCommand {
             .repository(self.repository)
             .dataset(self.dataset)
             .network(network_config)
-            .files(prepared_files.into_iter().chain(files_rx.into_iter()))
+            .files(
+                prepared_files
+                    .clone()
+                    .into_iter()
+                    .chain(files_rx.into_iter()),
+            )
             .report(PublishStatsReport { tx: event_tx })
             .build()?;
 
@@ -411,19 +379,15 @@ impl PublishCommand {
             async move { asimov_dataset_cli::publish::publish_datasets(ctx, params).await }
         });
 
-        let (ui_event_tx, ui_event_rx) = crossbeam::channel::unbounded();
-        let input_task = set.spawn(ui::listen_input(ui_event_tx));
+        let total_bytes = prepared_files.iter().map(|(_, size)| size).sum();
+        let ui_state = ui::PublishState {
+            queued_files: prepared_files,
+            total_bytes,
+            prepare: prepare_state,
+            ..Default::default()
+        };
 
-        ui::run_publish(
-            &mut terminal,
-            verbose,
-            ui_state,
-            ui_event_rx,
-            event_rx,
-            || cancel.cancel(),
-        )?;
-
-        input_task.abort();
+        ui::run_publish(verbosity, ui_state, event_rx)?;
 
         while let Some(join_result) = set.join_next().await {
             match join_result {
@@ -432,10 +396,6 @@ impl PublishCommand {
                 Ok(task_result) => task_result?,
             }
         }
-
-        ratatui::restore();
-
-        print!("\n\n");
 
         Ok(())
     }
