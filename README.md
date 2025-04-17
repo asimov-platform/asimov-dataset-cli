@@ -21,7 +21,7 @@
 #### Installation via Cargo
 
 ```bash
-cargo install asimov-dataset-cli@25.0.0-dev.3
+cargo install asimov-dataset-cli@25.0.0-dev.4
 ```
 
 ### Installation using Package Manager
