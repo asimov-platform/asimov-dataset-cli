@@ -20,7 +20,7 @@ jobs:
     continue-on-error: false
     steps:
       - name: Build
-        uses: asimov-platform/build-rust-action@v2
+        uses: asimov-platform/build-rust-action@v3
 
         with:
           target: ${{ matrix.target }}
