@@ -11,7 +11,7 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: windows-latest
             artifact: windows-x64
             target: x86_64-pc-windows-gnu
             extension: exe
@@ -30,4 +30,4 @@ jobs:
           binary-extension: ${{ matrix.extension }}
           strip-artifact: ${{ matrix.strip || 'false' }}
           use-zigbuild: ${{ matrix.use-zigbuild || 'false' }}
-          rust-toolchain: stable
+          rust-toolchain: 1.81.0

@@ -4,6 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-near-api = { version = "0.5.0", default-features = false}
+near-api = { version = "0.5.0", default-features = false }
 tokio = { version = "1.44.1", features = ["rt-multi-thread", "macros"] }
 crunchy = "=0.2.2"

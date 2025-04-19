@@ -295,16 +295,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "core-foundation"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b55271e5c8c478ad3f38ad24ef34923091e0548492a266d19b3c0b4d82574c63"
-dependencies = [
- "core-foundation-sys",
- "libc",
-]
-
-[[package]]
 name = "core-foundation-sys"
 version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -405,31 +395,6 @@ dependencies = [
  "darling_core",
  "quote",
  "syn 2.0.100",
-]
-
-[[package]]
-name = "dbus"
-version = "0.9.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1bb21987b9fb1613058ba3843121dd18b163b254d8a6e797e144cbac14d96d1b"
-dependencies = [
- "libc",
- "libdbus-sys",
- "winapi",
-]
-
-[[package]]
-name = "dbus-secret-service"
-version = "4.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b42a16374481d92aed73ae45b1f120207d8e71d24fb89f357fadbd8f946fd84b"
-dependencies = [
- "dbus",
- "futures-util",
- "num",
- "once_cell",
- "openssl",
- "rand",
 ]
 
 [[package]]
@@ -1203,21 +1168,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "keyring"
-version = "3.6.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1961983669d57bdfe6c0f3ef8e4c229b5ef751afcc7d87e4271d2f71f6ccfa8b"
-dependencies = [
- "byteorder",
- "dbus-secret-service",
- "log",
- "openssl",
- "security-framework 2.11.1",
- "security-framework 3.2.0",
- "windows-sys 0.59.0",
-]
-
-[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1228,16 +1178,6 @@ name = "libc"
 version = "0.2.172"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d750af042f7ef4f724306de029d18836c26c1765a54a6a3f094cbd23a7267ffa"
-
-[[package]]
-name = "libdbus-sys"
-version = "0.2.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06085512b750d640299b79be4bad3d2fa90a9c00b1fd9e1b46364f66f0485c72"
-dependencies = [
- "cc",
- "pkg-config",
-]
 
 [[package]]
 name = "linux-raw-sys"
@@ -1307,7 +1247,7 @@ dependencies = [
  "openssl-probe",
  "openssl-sys",
  "schannel",
- "security-framework 2.11.1",
+ "security-framework",
  "security-framework-sys",
  "tempfile",
 ]
@@ -1346,7 +1286,6 @@ dependencies = [
  "bs58 0.4.0",
  "ed25519-dalek",
  "futures",
- "keyring",
  "near-abi",
  "near-account-id",
  "near-contract-standards",
@@ -1384,7 +1323,7 @@ dependencies = [
  "near-parameters",
  "near-primitives",
  "near-time",
- "num-rational 0.3.2",
+ "num-rational",
  "serde",
  "serde_json",
  "sha2 0.10.8",
@@ -1506,7 +1445,7 @@ dependencies = [
  "near-account-id",
  "near-primitives-core",
  "near-schema-checker-lib",
- "num-rational 0.3.2",
+ "num-rational",
  "serde",
  "serde_repr",
  "serde_yaml",
@@ -1540,7 +1479,7 @@ dependencies = [
  "near-schema-checker-lib",
  "near-stdx",
  "near-time",
- "num-rational 0.3.2",
+ "num-rational",
  "ordered-float",
  "primitive-types",
  "rand",
@@ -1570,7 +1509,7 @@ dependencies = [
  "enum-map",
  "near-account-id",
  "near-schema-checker-lib",
- "num-rational 0.3.2",
+ "num-rational",
  "serde",
  "serde_repr",
  "sha2 0.10.8",
@@ -1669,20 +1608,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "num"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35bd024e8b2ff75562e5f34e7f4905839deb4b22955ef5e73d2fea1b9813cb23"
-dependencies = [
- "num-bigint 0.4.6",
- "num-complex",
- "num-integer",
- "num-iter",
- "num-rational 0.4.2",
- "num-traits",
-]
-
-[[package]]
 name = "num-bigint"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1690,25 +1615,6 @@ checksum = "5f6f7833f2cbf2360a6cfd58cd41a53aa7a90bd4c202f5b1c7dd2ed73c57b2c3"
 dependencies = [
  "autocfg",
  "num-integer",
- "num-traits",
-]
-
-[[package]]
-name = "num-bigint"
-version = "0.4.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5e44f723f1133c9deac646763579fdb3ac745e418f2a7af9cd0c431da1f20b9"
-dependencies = [
- "num-integer",
- "num-traits",
-]
-
-[[package]]
-name = "num-complex"
-version = "0.4.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "73f88a1307638156682bada9d7604135552957b7818057dcef22705b4d509495"
-dependencies = [
  "num-traits",
 ]
 
@@ -1728,38 +1634,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "num-iter"
-version = "0.1.45"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1429034a0490724d0075ebb2bc9e875d6503c3cf69e235a8941aa757d83ef5bf"
-dependencies = [
- "autocfg",
- "num-integer",
- "num-traits",
-]
-
-[[package]]
 name = "num-rational"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "12ac428b1cb17fce6f731001d307d351ec70a6d202fc2e60f7d4c5e42d8f4f07"
 dependencies = [
  "autocfg",
- "num-bigint 0.3.3",
+ "num-bigint",
  "num-integer",
  "num-traits",
  "serde",
-]
-
-[[package]]
-name = "num-rational"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f83d14da390562dca69fc84082e73e548e1ad308d24accdedd2720017cb37824"
-dependencies = [
- "num-bigint 0.4.6",
- "num-integer",
- "num-traits",
 ]
 
 [[package]]
@@ -2175,20 +2059,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "897b2245f0b511c87893af39b033e5ca9cce68824c4d7e7630b5a1d339658d02"
 dependencies = [
  "bitflags",
- "core-foundation 0.9.4",
- "core-foundation-sys",
- "libc",
- "security-framework-sys",
-]
-
-[[package]]
-name = "security-framework"
-version = "3.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "271720403f46ca04f7ba6f55d438f8bd878d6b8ca0a1046e8228c4145bcbb316"
-dependencies = [
- "bitflags",
- "core-foundation 0.10.0",
+ "core-foundation",
  "core-foundation-sys",
  "libc",
  "security-framework-sys",
@@ -2526,7 +2397,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c879d448e9d986b661742763247d3693ed13609438cf3d006f51f5368a5ba6b"
 dependencies = [
  "bitflags",
- "core-foundation 0.9.4",
+ "core-foundation",
  "system-configuration-sys",
 ]
 
