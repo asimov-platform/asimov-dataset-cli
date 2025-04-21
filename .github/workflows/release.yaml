@@ -11,7 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 1) Bring in MSYS2 and install the Mingw-w64 Perl + build tools
+      # 1) Install MSYS2 + the Mingw-w64 Perl toolchain, make, pkg-config
       - name: Setup MSYS2 toolchain
         uses: msys2/setup-msys2@v2
         with:
@@ -22,17 +22,19 @@ jobs:
             mingw-w64-x86_64-pkg-config
             make
 
-      # 2) Ensure the MSYS2 Perl is first in PATH
+      # 2) Prepend the MSYS2 mingw64/bin to PATH for subsequent steps
       - name: Prepend MSYS2 to PATH
-        run: echo "C:\msys64\mingw64\bin" >> $Env:GITHUB_PATH
+        run: echo "C:\\msys64\\mingw64\\bin" >> $Env:GITHUB_PATH
 
-      # 3) Build with the vendored OpenSSL feature as before
+      # 3) **Build inside MSYS2** so that the vendored OpenSSL build uses the MSYS2 Perl
       - name: Build (vendored OpenSSL)
-        uses: asimov-platform/build-rust-action@v3
-        with:
-          target: x86_64-pc-windows-gnu
-          artifact-name: asimov-dataset-cli
-          artifact-prefix: release
-          binary-name: asimov-dataset-cli
-          binary-extension: exe
-          rust-toolchain: 1.85.0
+        # run this step under the msys2 bash environment
+        shell: msys2 {0}
+        run: |
+          # ensure the Windows GNU target is installed
+          rustup toolchain install 1.85.0-x86_64-pc-windows-gnu
+          rustup default 1.85.0-x86_64-pc-windows-gnu
+          rustup target add x86_64-pc-windows-gnu
+
+          # now cargo will pick up the MSYS2 perl and build openssl-src correctly
+          cargo build --release --target x86_64-pc-windows-gnu
