@@ -17,9 +17,17 @@ jobs:
             extension: exe
     name: Build ${{ matrix.artifact }}
     runs-on: ${{ matrix.os }}
-    continue-on-error: false
+    env:
+      OPENSSL_NO_VENDOR: 1
     steps:
-      - name: Build
+      - uses: actions/checkout@v4
+
+      - name: Install OpenSSL
+        shell: pwsh
+        run: |
+          choco install openssl.light make -y
+
+      - name: Build and publish
         uses: asimov-platform/build-rust-action@v3
 
         with:
