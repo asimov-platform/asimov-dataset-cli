@@ -11,10 +11,9 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: windows-latest
             artifact: windows-x64
             target: x86_64-pc-windows-gnu
-            use-zigbuild: true
             extension: exe
     name: Build ${{ matrix.artifact }}
     runs-on: ${{ matrix.os }}
