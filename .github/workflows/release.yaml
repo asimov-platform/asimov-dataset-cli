@@ -6,36 +6,33 @@ on:
   push:
 
 jobs:
-  build:
-    strategy:
-      fail-fast: true
-      matrix:
-        include:
-          - os: windows-latest
-            artifact: windows-x64
-            target: x86_64-pc-windows-gnu
-            extension: exe
-    name: Build ${{ matrix.artifact }}
-    runs-on: ${{ matrix.os }}
-    env:
-      OPENSSL_NO_VENDOR: 1
+  build-windows:
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install OpenSSL
-        shell: pwsh
-        run: |
-          choco install openssl.light make -y
-
-      - name: Build and publish
-        uses: asimov-platform/build-rust-action@v3
-
+      # 1) Bring in MSYS2 and install the Mingw-w64 Perl + build tools
+      - name: Setup MSYS2 toolchain
+        uses: msys2/setup-msys2@v2
         with:
-          target: ${{ matrix.target }}
-          artifact-name: ${{ matrix.artifact }}
-          artifact-prefix: test
-          binary-name: test-near-api
-          binary-extension: ${{ matrix.extension }}
-          strip-artifact: ${{ matrix.strip || 'false' }}
-          use-zigbuild: ${{ matrix.use-zigbuild || 'false' }}
+          update: true
+          install: >
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-perl
+            mingw-w64-x86_64-pkg-config
+            make
+
+      # 2) Ensure the MSYS2 Perl is first in PATH
+      - name: Prepend MSYS2 to PATH
+        run: echo "C:\msys64\mingw64\bin" >> $Env:GITHUB_PATH
+
+      # 3) Build with the vendored OpenSSL feature as before
+      - name: Build (vendored OpenSSL)
+        uses: asimov-platform/build-rust-action@v3
+        with:
+          target: x86_64-pc-windows-gnu
+          artifact-name: asimov-dataset-cli
+          artifact-prefix: release
+          binary-name: asimov-dataset-cli
+          binary-extension: exe
           rust-toolchain: 1.85.0
