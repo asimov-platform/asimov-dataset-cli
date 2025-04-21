@@ -32,7 +32,7 @@ cc = "1.1"
 [dependencies]
 borsh = "1.5.6"
 clap = { version = "4.5", default-features = false }
-clientele = "0.2.5"
+clientele = "0.3.0"
 color-eyre = { version = "0.6.3", default-features = false }
 crossbeam = "0.8.4"
 derive_builder = "0.20.2"
