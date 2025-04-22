@@ -12,6 +12,7 @@ use asimov_dataset_cli::{
     publish::{self, PublishStatsReport},
     ui,
 };
+use clap::builder::{styling::AnsiColor, Styles};
 use clientele::{
     crates::clap::{CommandFactory, Parser, Subcommand},
     exit, StandardOptions,
@@ -25,7 +26,7 @@ use tracing::debug;
 
 /// ASIMOV Dataset Command-Line Interface (CLI)
 #[derive(Debug, Parser)]
-#[command(name = "asimov-dataset", about, long_about)]
+#[command(name = "asimov-dataset", about, long_about, styles=get_cli_styles())]
 struct Options {
     #[clap(flatten)]
     flags: StandardOptions,
@@ -445,4 +446,12 @@ fn create_tmp_dir() -> std::io::Result<PathBuf> {
 
 fn file_size(file: &PathBuf) -> usize {
     std::fs::metadata(file).map(|f| f.len()).unwrap() as usize
+}
+
+fn get_cli_styles() -> Styles {
+    Styles::styled()
+        .header(AnsiColor::Green.on_default().bold())
+        .usage(AnsiColor::Green.on_default())
+        .literal(AnsiColor::Cyan.on_default().bold())
+        .placeholder(AnsiColor::Cyan.on_default())
 }
