@@ -13,13 +13,12 @@ use asimov_dataset_cli::{
     ui,
 };
 use clientele::{
-    StandardOptions,
-    SysexitsError::*,
     crates::clap::{CommandFactory, Parser, Subcommand},
-    exit,
+    exit, StandardOptions,
+    SysexitsError::*,
 };
 use color_eyre::Section;
-use eyre::{Context, Result, bail, eyre};
+use eyre::{bail, eyre, Context, Result};
 use near_api::{AccountId, NetworkConfig, Signer};
 use tokio::task::JoinSet;
 use tracing::debug;
@@ -214,7 +213,7 @@ impl PrepareCommand {
 
         let mut set: JoinSet<Result<()>> = JoinSet::new();
 
-        let (ctx, cancel) = context::new_cancel_context();
+        let (ctx, _cancel) = context::new_cancel_context();
 
         set.spawn({
             let ctx = ctx.clone();
@@ -311,7 +310,7 @@ impl PublishCommand {
 
         let mut set: JoinSet<Result<()>> = JoinSet::new();
 
-        let (ctx, cancel) = context::new_cancel_context();
+        let (ctx, _cancel) = context::new_cancel_context();
 
         if !unprepared_files.is_empty() {
             let dir = create_tmp_dir().context("Failed to create directory for prepared files")?;
