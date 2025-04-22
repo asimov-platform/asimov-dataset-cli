@@ -94,8 +94,7 @@ struct PublishCommand {
     /// Account that signs batches sent to the repository.
     ///
     /// By default, the repository account is used for signing.
-    /// Can also be set via the NEAR_SIGNER environment variable.
-    #[arg(long)]
+    #[arg(long, env = "NEAR_SIGNER")]
     signer: Option<AccountId>,
 
     /// Optional dataset name in the repository.
@@ -263,18 +262,10 @@ impl PublishCommand {
             }
         };
 
-        let signer_id = {
-            if let Some(signer) = self.signer {
-                signer
-            } else {
-                match std::env::var("NEAR_SIGNER") {
-                    Ok(signer) => signer
-                        .parse()
-                        .context("Invalid account address in NEAR_SIGNER")?,
-                    Err(std::env::VarError::NotPresent) => self.repository.clone(),
-                    Err(err) => bail!(err),
-                }
-            }
+        let signer_id = if let Some(signer) = self.signer {
+            signer
+        } else {
+            self.repository.clone()
         };
 
         let signer = get_signer(&signer_id, &network_config).await?;
@@ -439,7 +430,7 @@ async fn get_signer(account: &AccountId, network: &NetworkConfig) -> Result<Arc<
     .with_suggestion(|| {
         "\nYou can:\n\
              • Import your account into the keychain:\n\t $ near account import-account\n\
-             • Set the NEAR_PRIVATE_KEY environment variable with your private key\n\
+             • Set the NEAR_PRIVATE_KEY environment variable with your private key (\"ed25519:...\")\n\
              • Use the --signer option to specify a different account that has access to the repository contract"
     }))
 }
