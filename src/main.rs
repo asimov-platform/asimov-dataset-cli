@@ -5,8 +5,6 @@
 mod feature;
 
 use std::{collections::VecDeque, path::PathBuf, sync::Arc};
-#[cfg(unix)]
-use std::os::unix::fs::MetadataExt;
 
 use asimov_dataset_cli::{
     context,
@@ -158,18 +156,6 @@ pub async fn main() -> Result<()> {
     match command {
         Command::Prepare(cmd) => cmd.run(options.flags.verbose > 0).await,
         Command::Publish(cmd) => cmd.run(options.flags.verbose > 0).await,
-    }
-}
-
-fn file_size(file: &PathBuf) -> usize {
-    let meta = std::fs::metadata(file).unwrap();
-    #[cfg(unix)]
-    {
-        meta.size() as usize
-    }
-    #[cfg(not(unix))]
-    {
-        meta.len() as usize
     }
 }
 
@@ -493,4 +479,8 @@ fn create_tmp_dir() -> std::io::Result<PathBuf> {
     temp_dir.push(std::process::id().to_string());
     std::fs::create_dir_all(&temp_dir)?;
     Ok(temp_dir)
+}
+
+fn file_size(file: &PathBuf) -> usize {
+    std::fs::metadata(file).map(|f| f.len()).unwrap() as usize
 }
