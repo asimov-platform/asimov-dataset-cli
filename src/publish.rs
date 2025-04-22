@@ -1,11 +1,20 @@
 // This is free and unencumbered software released into the public domain.
 
 use borsh::BorshSerialize;
+use color_eyre::{
+    eyre::{eyre, Context as _, Result},
+    Section,
+};
 use crossbeam::channel::Sender;
-use eyre::{Context as _, Result, eyre};
 use near_api::{
+    near_primitives::{
+        action::{Action, DeployContractAction, FunctionCallAction},
+        errors::{
+            ActionError, ActionErrorKind, CompilationError, FunctionCallError, TxExecutionError,
+        },
+        views::FinalExecutionStatus,
+    },
     AccountId, NearGas, NetworkConfig, Transaction,
-    near_primitives::action::{Action, DeployContractAction, FunctionCallAction},
 };
 use std::{io::Read, path::PathBuf, sync::Arc};
 
@@ -99,7 +108,7 @@ where
 
         let bytes = std::fs::File::open(&filename)?.read_to_end(&mut args)?;
 
-        let _tx_outcome = Transaction::construct(params.signer_id.clone(), params.repository.clone())
+        let tx_outcome = Transaction::construct(params.signer_id.clone(), params.repository.clone())
             .add_action(Action::FunctionCall(Box::new(FunctionCallAction {
                 method_name: "rdf_insert".into(),
                 args,
@@ -112,6 +121,27 @@ where
             .inspect(
                 |outcome| tracing::info!(?filename, status = ?outcome.transaction_outcome.outcome.status, "uploaded dataset"),
             )?;
+
+        if let FinalExecutionStatus::Failure(error) = tx_outcome.status {
+            let msg = format!("Failed to upload batch: {}", filename.display());
+
+            if matches!(
+                error,
+                TxExecutionError::ActionError(ActionError {
+                    kind: ActionErrorKind::FunctionCallError(FunctionCallError::CompilationError(
+                        CompilationError::CodeDoesNotExist { account_id: _ }
+                    )),
+                    ..
+                })
+            ) {
+                return Err(error)
+                    .wrap_err(msg)
+                    .with_note(|| "The address does not contain a contract with a method `rdf_insert`")
+                    .with_suggestion(|| "If you want to upload a basic vault at the address you can rerun the publish command with the option `--upload-contract`");
+            }
+
+            return Err(error).wrap_err(msg);
+        }
 
         std::fs::remove_file(&filename).ok();
 
