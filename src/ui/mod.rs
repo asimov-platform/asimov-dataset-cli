@@ -32,7 +32,7 @@ pub fn run_prepare(
             .progress_chars("##-");
 
     let prepare_style =
-        ProgressStyle::with_template("{msg:10} [{bar:40}] {human_pos} / {human_len}")
+        ProgressStyle::with_template("{msg:10} [{bar:40}] {human_pos} / {human_len} statements")
             .unwrap()
             .progress_chars("##-");
 
@@ -42,10 +42,10 @@ pub fn run_prepare(
         multi.set_draw_target(ProgressDrawTarget::hidden());
     }
     let reader_bar = ProgressBar::new(state.total_bytes as u64)
-        .with_message("Parsing")
+        .with_message("Read")
         .with_style(parsing_style);
     let prepare_bar = ProgressBar::new(0)
-        .with_message("Batching")
+        .with_message("Batch")
         .with_style(prepare_style);
 
     multi.add(reader_bar.clone());
@@ -60,7 +60,7 @@ pub fn run_prepare(
                 prepare_bar.inc_length(progress.statement_count as u64);
                 if progress.finished && verbosity > 1 {
                     multi.println(format!(
-                        "✅ Finished reading file {}",
+                        " ✅ Finished reading file {}",
                         progress.filename.display()
                     ))?;
                 }
@@ -74,7 +74,7 @@ pub fn run_prepare(
                         .file_name()
                         .and_then(std::ffi::OsStr::to_str)
                     {
-                        multi.println(format!("✅ Prepared batch {}", filename))?;
+                        multi.println(format!(" ✅ Created batch {}", filename))?;
                     }
                 }
                 state.update_prepare_state(progress);
@@ -100,12 +100,12 @@ pub fn run_publish(
             .progress_chars("##-");
 
     let prepare_style =
-        ProgressStyle::with_template("{msg:10} [{bar:40}] {human_pos} / {human_len}")
+        ProgressStyle::with_template("{msg:10} [{bar:40}] {human_pos} / {human_len} statements")
             .unwrap()
             .progress_chars("##-");
 
     let upload_style =
-        ProgressStyle::with_template("{msg:10} [{bar:40}] {human_pos} / {human_len}")
+        ProgressStyle::with_template("{msg:10} [{bar:40}] {human_pos} / {human_len} batches")
             .unwrap()
             .progress_chars("##-");
 
@@ -123,12 +123,12 @@ pub fn run_publish(
                 .map(|state| state.total_bytes)
                 .unwrap_or_default() as u64,
         )
-        .with_message("Parsing")
+        .with_message("Read")
         .with_style(parsing_style),
     );
     let prepare_bar = multi.add(
         ProgressBar::new(0)
-            .with_message("Batching")
+            .with_message("Batch")
             .with_style(prepare_style),
     );
     let upload_bar = multi.add(
@@ -146,7 +146,7 @@ pub fn run_publish(
                 prepare_bar.inc_length(progress.statement_count as u64);
                 if progress.finished && verbosity > 1 {
                     multi.println(format!(
-                        "✅ Finished reading file {}",
+                        " ✅ Finished reading file {}",
                         progress.filename.display()
                     ))?;
                 }
@@ -163,7 +163,7 @@ pub fn run_publish(
                         .file_name()
                         .and_then(std::ffi::OsStr::to_str)
                     {
-                        multi.println(format!("✅ Prepared batch {}", filename))?;
+                        multi.println(format!(" ✅ Created batch {}", filename))?;
                     }
                 }
                 if let Some(ref mut state) = state.prepare {
@@ -178,7 +178,7 @@ pub fn run_publish(
                         .file_name()
                         .and_then(std::ffi::OsStr::to_str)
                     {
-                        multi.println(format!("✅ Uploaded batch {}", filename))?;
+                        multi.println(format!(" ✅ Uploaded batch {}", filename))?;
                     }
                 }
                 state.update_publish_state(progress);
