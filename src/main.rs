@@ -4,7 +4,7 @@
 
 mod feature;
 
-use std::{collections::VecDeque, os::unix::fs::MetadataExt, path::PathBuf, sync::Arc};
+use std::{collections::VecDeque, path::PathBuf, sync::Arc};
 
 use asimov_dataset_cli::{
     context,
@@ -177,10 +177,7 @@ impl PrepareCommand {
         let queued_files: VecDeque<(PathBuf, usize)> = files
             .iter()
             .cloned()
-            .map(|file| {
-                let size = std::fs::metadata(&file).unwrap().size() as usize;
-                (file, size)
-            })
+            .map(|file| (file.clone(), file_size(&file)))
             .collect();
 
         let total_bytes = queued_files.iter().map(|(_, size)| size).sum();
@@ -306,10 +303,7 @@ impl PublishCommand {
         let prepared_files: VecDeque<(PathBuf, usize)> = prepared_files
             .iter()
             .cloned()
-            .map(|file| {
-                let size = std::fs::metadata(&file).unwrap().size() as usize;
-                (file, size)
-            })
+            .map(|file| (file.clone(), file_size(&file)))
             .collect();
 
         let (event_tx, event_rx) = crossbeam::channel::unbounded();
@@ -343,10 +337,7 @@ impl PublishCommand {
         let unprepared_files: VecDeque<(PathBuf, usize)> = unprepared_files
             .iter()
             .cloned()
-            .map(|file| {
-                let size = std::fs::metadata(&file).unwrap().size() as usize;
-                (file, size)
-            })
+            .map(|file| (file.clone(), file_size(&file)))
             .collect();
 
         let prepare_state = if unprepared_files.is_empty() {
@@ -460,4 +451,8 @@ fn create_tmp_dir() -> std::io::Result<PathBuf> {
     temp_dir.push(std::process::id().to_string());
     std::fs::create_dir_all(&temp_dir)?;
     Ok(temp_dir)
+}
+
+fn file_size(file: &PathBuf) -> usize {
+    std::fs::metadata(file).map(|f| f.len()).unwrap() as usize
 }
