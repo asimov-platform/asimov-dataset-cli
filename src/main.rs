@@ -151,7 +151,7 @@ pub async fn main() -> Result<()> {
     }
 
     let Some(command) = options.command else {
-        Options::command().print_help()?;
+        Options::command().color(options.flags.color).print_help()?;
         exit(EX_USAGE);
     };
 
