@@ -52,7 +52,7 @@ rdf_rs = "0.2.1"
 rdf-borsh = "0.2.1"
 rdf-writer = "0.2.1"
 
-crunchy = "=0.2.3"
+crunchy = "=0.2.4"
 
 [[bin]]
 name = "asimov-dataset"
