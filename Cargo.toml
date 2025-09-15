@@ -42,7 +42,7 @@ indicatif = "0.17.11"
 near-api = { version = "0.6.0", default-features = false, features = ["keystore"] }
 num_cpus = "^1.0"
 oneshot = "0.1.11"
-oxrdf = { version = "0.2.4", features = ["rdf-star"] }
+oxrdf = { version = "0.3.0", features = ["rdf-star"] }
 oxrdfio = { version = "0.1.7", features = ["rdf-star"] }
 tokio = { version = "1.44.1", features = ["rt-multi-thread", "macros"] }
 tracing = "0.1.41"
